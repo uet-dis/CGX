@@ -4,10 +4,12 @@ data/
 dataset_paper/
 dataset_test/
 test*/
+test_*
 .dockerignore
 app.sh
 temp/
 qna/
+output/
 
 ### Python template
 # Byte-compiled / optimized / DLL files
