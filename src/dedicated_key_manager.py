@@ -57,9 +57,12 @@ class DedicatedKeyManager:
         
         self._initialized = True
     
-    def assign_key(self, task_id=None):
+    def assign_key(self, task_id=None, exclude_keys=None):
         """
         Assign 1 dedicated key cho task
+        Args:
+            task_id: Task identifier
+            exclude_keys: Set of key indices to EXCLUDE (for rotation after failure)
         Returns: (key_index, api_key_string)
         """
         with self._lock:
@@ -67,18 +70,31 @@ class DedicatedKeyManager:
                 import uuid
                 task_id = str(uuid.uuid4())
             
-            # Check if task already has a key
+            exclude_keys = exclude_keys or set()
+            
+            # Check if task already has a key AND not in exclude list
             if task_id in self.key_assignments:
                 key_idx = self.key_assignments[task_id]
-                logger.info(f"♻️  [DEDICATED] Task {task_id[:8]} reusing key #{key_idx + 1}")
-                return key_idx, self.api_keys[key_idx]
+                if key_idx not in exclude_keys:
+                    logger.info(f"♻️  [DEDICATED] Task {task_id[:8]} reusing key #{key_idx + 1}")
+                    return key_idx, self.api_keys[key_idx]
+                else:
+                    # Key is excluded, need to rotate
+                    logger.warning(f"🔄 [DEDICATED] Key #{key_idx + 1} excluded, rotating for task {task_id[:8]}")
+                    self.key_in_use.discard(key_idx)
+                    del self.key_assignments[task_id]
             
-            # Find first available key (not in use)
-            available_keys = [i for i in range(len(self.api_keys)) if i not in self.key_in_use]
+            # Find first available key (not in use AND not excluded)
+            available_keys = [i for i in range(len(self.api_keys)) 
+                            if i not in self.key_in_use and i not in exclude_keys]
             
             if not available_keys:
-                # All keys in use, pick least-recently-used (round-robin)
-                key_idx = len(self.key_assignments) % len(self.api_keys)
+                # All keys in use or excluded, pick from non-excluded keys
+                non_excluded = [i for i in range(len(self.api_keys)) if i not in exclude_keys]
+                if not non_excluded:
+                    raise Exception(f"All {len(self.api_keys)} keys have been tried and failed!")
+                
+                key_idx = random.choice(non_excluded)
                 logger.warning(f"⚠️  [DEDICATED] All keys in use. Sharing key #{key_idx + 1} for task {task_id[:8]}")
             else:
                 # Pick random from available keys to distribute load
@@ -111,13 +127,17 @@ class DedicatedKeyManager:
 
 class DedicatedKeyClient:
     """
-    Client sử dụng 1 key độc quyền với rate limiting
+    Client sử dụng 1 key độc quyền với rate limiting + auto rotation
     Rate limit: 15 requests/minute = 1 request every 4 seconds
+    Auto-rotates to new key if current key fails after max retries
     """
     
     def __init__(self, task_id=None):
         self.manager = DedicatedKeyManager()
         self.task_id = task_id or f"task_{id(self)}"
+        self.failed_keys = set()  # Track keys that failed for this client
+        
+        # Get initial key
         self.key_index, self.api_key = self.manager.assign_key(self.task_id)
         self.genai_client = genai.Client(api_key=self.api_key)
         
@@ -127,77 +147,139 @@ class DedicatedKeyClient:
         
         logger.info(f"🎯 [CLIENT] Initialized for task {self.task_id[:8]} with key #{self.key_index + 1}")
     
+    def _rotate_to_new_key(self):
+        """Rotate to a new key after current key fails"""
+        self.failed_keys.add(self.key_index)
+        logger.warning(f"🔄 [CLIENT] Rotating from failed key #{self.key_index + 1}. "
+                      f"Failed keys so far: {sorted([k+1 for k in self.failed_keys])}")
+        
+        try:
+            # Get new key excluding failed ones
+            self.key_index, self.api_key = self.manager.assign_key(
+                self.task_id, 
+                exclude_keys=self.failed_keys
+            )
+            self.genai_client = genai.Client(api_key=self.api_key)
+            self.last_request_time = 0  # Reset rate limiter
+            logger.info(f"✅ [CLIENT] Rotated to new key #{self.key_index + 1}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ [CLIENT] Cannot rotate: {e}")
+            return False
+    
     def call_with_retry(self, prompt, max_retries=5, model="models/gemini-2.5-flash-lite", **config):
         """
-        Call API với dedicated key và rate limiting
+        Call API với dedicated key và rate limiting + auto rotation
+        
+        Strategy:
+        - Try max_retries times with current key
+        - If all retries fail → rotate to new key and try again
+        - Repeat until success or all keys exhausted
         
         Args:
             prompt: Text prompt
-            max_retries: Max retry attempts
+            max_retries: Max retry attempts PER KEY
             model: Model name (gemini-2.5-flash-lite hoặc gemini-2.5-flash-lite-preview)
             **config: Additional config
         """
-        for attempt in range(max_retries):
-            try:
-                # Rate limiting: Đảm bảo ít nhất 4 giây giữa các requests
-                current_time = time.time()
-                time_since_last = current_time - self.last_request_time
-                
-                if time_since_last < self.min_delay_between_requests:
-                    sleep_time = self.min_delay_between_requests - time_since_last
-                    logger.debug(f"⏳ [CLIENT #{self.key_index + 1}] Rate limiting: sleeping {sleep_time:.1f}s")
-                    time.sleep(sleep_time)
-                
-                self.last_request_time = time.time()
-                
-                # Make API call
-                response_obj = self.genai_client.models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=config if config else {"temperature": 0}
-                )
-                
-                # Handle response safely
-                if response_obj and hasattr(response_obj, "text") and response_obj.text:
-                    return response_obj.text.strip()
-                elif response_obj and hasattr(response_obj, "candidates") and response_obj.candidates:
-                    candidate = response_obj.candidates[0]
-                    if hasattr(candidate, "finish_reason"):
-                        logger.warning(f"⚠️ [CLIENT #{self.key_index + 1}] Response blocked: {candidate.finish_reason}")
-                        return ""
-                else:
-                    logger.warning(f"⚠️ [CLIENT #{self.key_index + 1}] Empty response")
-                    return ""
-                
-            except Exception as e:
-                error_str = str(e)
-                
-                # 1. Rate limit - wait longer
-                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    wait_time = 10 + (attempt * 5)  # Exponential backoff: 10, 15, 20, 25, 30s
-                    logger.warning(f"⚠️ [CLIENT #{self.key_index + 1}] Rate limit hit. "
-                                 f"Waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(wait_time)
-                    continue
-                
-                # 2. Server errors
-                elif "500" in error_str or "503" in error_str or "INTERNAL" in error_str:
-                    logger.warning(f"⚠️ [CLIENT #{self.key_index + 1}] Server error. Retrying in 5s...")
-                    time.sleep(5.0)
-                    continue
-                
-                # 3. Network errors
-                elif "disconnected" in error_str.lower() or "connection" in error_str.lower():
-                    logger.warning(f"⚠️ [CLIENT #{self.key_index + 1}] Network error. Retrying in 3s...")
-                    time.sleep(3.0)
-                    continue
-                
-                # 4. Other errors - raise
-                else:
-                    logger.error(f"❌ [CLIENT #{self.key_index + 1}] Unexpected error: {error_str}")
-                    raise
+        max_key_rotations = len(self.manager.api_keys)  # Try all available keys
         
-        raise Exception(f"Max retries ({max_retries}) exceeded for key #{self.key_index + 1}")
+        for rotation_attempt in range(max_key_rotations):
+            current_key_num = self.key_index + 1
+            logger.debug(f"🔑 [CLIENT] Using key #{current_key_num} (rotation {rotation_attempt + 1}/{max_key_rotations})")
+            
+            # Try max_retries with current key
+            for attempt in range(max_retries):
+                try:
+                    # Rate limiting: Đảm bảo ít nhất 4 giây giữa các requests
+                    current_time = time.time()
+                    time_since_last = current_time - self.last_request_time
+                    
+                    if time_since_last < self.min_delay_between_requests:
+                        sleep_time = self.min_delay_between_requests - time_since_last
+                        logger.debug(f"⏳ [CLIENT #{current_key_num}] Rate limiting: sleeping {sleep_time:.1f}s")
+                        time.sleep(sleep_time)
+                    
+                    self.last_request_time = time.time()
+                    
+                    # Make API call
+                    response_obj = self.genai_client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=config if config else {"temperature": 0}
+                    )
+                    
+                    # Handle response safely
+                    if response_obj and hasattr(response_obj, "text") and response_obj.text:
+                        return response_obj.text.strip()
+                    elif response_obj and hasattr(response_obj, "candidates") and response_obj.candidates:
+                        candidate = response_obj.candidates[0]
+                        if hasattr(candidate, "finish_reason"):
+                            finish_reason = str(candidate.finish_reason)
+                            logger.warning(f"⚠️ [CLIENT #{current_key_num}] Response blocked: {finish_reason}")
+                            # Treat blocked response as retryable error
+                            if attempt < max_retries - 1:
+                                time.sleep(3)
+                                continue
+                            else:
+                                # Last attempt, will trigger rotation
+                                raise Exception(f"Response blocked after {max_retries} attempts: {finish_reason}")
+                    else:
+                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Empty response")
+                        # Treat empty response as retryable error
+                        if attempt < max_retries - 1:
+                            time.sleep(3)
+                            continue
+                        else:
+                            # Last attempt, will trigger rotation
+                            raise Exception(f"Empty response after {max_retries} attempts")
+                    
+                except Exception as e:
+                    error_str = str(e)
+                    
+                    # 1. Rate limit - wait longer
+                    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                        wait_time = 10 + (attempt * 5)  # Exponential backoff: 10, 15, 20, 25, 30s
+                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Rate limit hit. "
+                                     f"Waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        
+                        # If this was the last retry, let it fall through to rotation
+                        if attempt == max_retries - 1:
+                            logger.error(f"❌ [CLIENT #{current_key_num}] Rate limit persists after {max_retries} retries")
+                            break  # Exit retry loop, go to rotation
+                        continue
+                    
+                    # 2. Server errors
+                    elif "500" in error_str or "503" in error_str or "INTERNAL" in error_str:
+                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Server error. Retrying in 5s...")
+                        time.sleep(5.0)
+                        continue
+                    
+                    # 3. Network errors
+                    elif "disconnected" in error_str.lower() or "connection" in error_str.lower():
+                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Network error. Retrying in 3s...")
+                        time.sleep(3.0)
+                        continue
+                    
+                    # 4. Other errors - raise
+                    else:
+                        logger.error(f"❌ [CLIENT #{current_key_num}] Unexpected error: {error_str}")
+                        raise
+            
+            # If we reach here, all retries with current key failed
+            logger.error(f"❌ [CLIENT] Key #{current_key_num} exhausted after {max_retries} retries")
+            
+            # Try to rotate to next key (unless this is the last rotation)
+            if rotation_attempt < max_key_rotations - 1:
+                if not self._rotate_to_new_key():
+                    break  # Cannot rotate anymore
+                logger.info(f"🔄 [CLIENT] Retrying with new key #{self.key_index + 1}...")
+                time.sleep(5)  # Brief pause before trying new key
+            else:
+                logger.error(f"❌ [CLIENT] All {max_key_rotations} keys exhausted!")
+        
+        raise Exception(f"All keys exhausted! Tried {len(self.failed_keys) + 1} different keys.")
     
     def __del__(self):
         """Release key when client is destroyed"""

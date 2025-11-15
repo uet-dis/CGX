@@ -344,9 +344,9 @@ def creat_metagraph_with_description(args, content: str, gid: str, n4j):
         from utils import merge_similar_nodes
         merge_similar_nodes(n4j, gid)
     
-    # Create Summary node
+    # Create Summary node (reuse the same client)
     logger.info(f"\n[Summary] Creating summary node...")
-    add_sum(n4j, content, gid)
+    add_sum(n4j, content, gid, client=client)
 
     logger.info(f"\n{'='*60}")
     logger.info(f"[Graph Construction] Completed! (GID: {gid[:8]}...)")

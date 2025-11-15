@@ -113,10 +113,14 @@ class ThreeLayerImporter:
 
                 if file_path.suffix == '.csv':
                     logger.info(f"  [Type] Structured data (CSV)")
+                    from dedicated_key_manager import create_dedicated_client
+                    
                     success = import_umls_csv_to_neo4j(str(file_path), gid, self.n4j)
                     if success:
+                        # Create simple client for CSV summary (minimal API calls)
+                        csv_client = create_dedicated_client(task_id=f"csv_{file_path.stem}")
                         summary_text = f"UMLS knowledge from {file_path.name}"
-                        add_sum(self.n4j, summary_text, gid)
+                        add_sum(self.n4j, summary_text, gid, client=csv_client)
                     else:
                         logger.warning(f"⚠️  Processing failed: {file_path.name}")
                         self.layer_gids[layer_name].remove(gid)

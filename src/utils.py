@@ -84,8 +84,23 @@ def add_gid(graph_element, gid):
         rel.properties['gid'] = gid
     return graph_element
 
-def add_sum(n4j,content,gid):
-    sum = process_chunks(content)
+def add_sum(n4j, content, gid, client=None):
+    """
+    Create summary node in Neo4j with optional dedicated client
+    
+    Args:
+        n4j: Neo4j connection
+        content: Text to summarize
+        gid: Graph ID
+        client: Optional DedicatedKeyClient. If None, creates temporary one.
+    """
+    from dedicated_key_manager import create_dedicated_client
+    
+    # Create client if not provided
+    if client is None:
+        client = create_dedicated_client(task_id=f"add_sum_{gid[:8]}")
+    
+    sum = process_chunks(content, client=client)
     creat_sum_query = """
         CREATE (s:Summary {content: $sum, gid: $gid})
         RETURN s

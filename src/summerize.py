@@ -41,14 +41,10 @@ def call_openai_api(chunk, client=None):
     
     Args:
         chunk: Text to summarize
-        client: Optional DedicatedKeyClient. If None, creates temporary client.
+        client: DedicatedKeyClient (REQUIRED). Should be passed from process_chunks().
     """
-    from dedicated_key_manager import create_dedicated_client
-    
     if client is None:
-        # For standalone usage (utils.py, run.py, qna_evaluator.py)
-        # Create a temporary dedicated client
-        client = create_dedicated_client(task_id="summerize_standalone")
+        raise ValueError("Client must be provided to call_openai_api()")
     
     full_prompt = f"{sum_prompt}\n\n{chunk}"
     return client.call_with_retry(full_prompt, model="models/gemini-2.5-flash-lite")
@@ -66,11 +62,17 @@ def process_chunks(content, client=None):
     
     Args:
         content: Text to process
-        client: Optional DedicatedKeyClient. If None, creates temporary client.
+        client: Optional DedicatedKeyClient. If None, creates ONE shared client for all chunks.
     """
+    from dedicated_key_manager import create_dedicated_client
+    
     chunks = split_into_chunks(content)
+    
+    # If no client provided, create ONE client for ALL chunks
+    if client is None:
+        client = create_dedicated_client(task_id="summerize_standalone")
 
-    # Processes chunks in parallel, passing client to each call
+    # Processes chunks in parallel, passing THE SAME client to each call
     from functools import partial
     call_with_client = partial(call_openai_api, client=client)
     

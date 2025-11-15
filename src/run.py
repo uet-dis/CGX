@@ -67,8 +67,13 @@ else:
                 merge_similar_nodes(n4j, None)
 
     if args.inference:
+        from dedicated_key_manager import create_dedicated_client
+        
         question = load_high("./prompt.txt")
-        sum = process_chunks(question)
+        
+        # Create dedicated client for inference
+        inference_client = create_dedicated_client(task_id="inference_main")
+        sum = process_chunks(question, client=inference_client)
         gid = seq_ret(n4j, sum)
         
         if gid is None:

@@ -10,14 +10,21 @@ from utils import *
 
 
 def creat_metagraph(args, content, gid, n4j):
+    """
+    Legacy graph creation function (deprecated - use creat_graph_with_description.py instead)
+    """
+    from dedicated_key_manager import create_dedicated_client
 
     # Set instance
     uio = UnstructuredIO()
     kg_agent = KnowledgeGraphAgent()
     whole_chunk = content
+    
+    # Create dedicated client for this graph
+    client = create_dedicated_client(task_id=f"legacy_gid_{gid[:8]}")
 
     if args.grained_chunk == True:
-        content = run_chunk(content)
+        content = run_chunk(content, client=client)
     else:
         content = [content]
     for cont in content:
@@ -33,6 +40,6 @@ def creat_metagraph(args, content, gid, n4j):
         n4j.add_graph_elements(graph_elements=[graph_elements])
     if args.ingraphmerge:
         merge_similar_nodes(n4j, gid)
-    add_sum(n4j, whole_chunk, gid)
+    add_sum(n4j, whole_chunk, gid, client=client)
     return n4j
 
