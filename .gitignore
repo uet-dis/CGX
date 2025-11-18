@@ -10,6 +10,7 @@ app.sh
 temp/
 qna/
 output/
+my_output/
 
 ### Python template
 # Byte-compiled / optimized / DLL files
