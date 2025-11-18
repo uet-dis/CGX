@@ -1,559 +1,391 @@
 """
-Document Parser - Chỉ chức năng parsing cơ bản
-Copy từ raganything/parser.py, giữ lại chỉ phần parsing
+parser.py
+
+Layout-aware MinerU parser using proven logic from test script.
+- Detects full-width items (title/authors) vs column items
+- Reads in order: full-width → left column → right column
+- Skips content before Abstract, stops after Conclusion
+- Filters subsection numbers and invalid sections
+- Returns List[Dict[str, str]] with {"type": "section"|"content", "text": str}
 """
 
 from __future__ import annotations
-
 import json
-import argparse
-import base64
 import subprocess
 import tempfile
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Tuple, Any, TypeVar
+from typing import List, Optional, Union, Dict, Tuple
+from collections import defaultdict
+import re
 
-T = TypeVar("T")
+logging.getLogger(__name__)
 
 
 class MineruExecutionError(Exception):
-    """catch mineru error"""
-
-    def __init__(self, return_code, error_msg):
-        self.return_code = return_code
-        self.error_msg = error_msg
-        super().__init__(
-            f"Mineru command failed with return code {return_code}: {error_msg}"
-        )
+    pass
 
 
 class Parser:
-    """Base class for document parsing utilities."""
-
-    # Define common file formats
     OFFICE_FORMATS = {".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"}
-    IMAGE_FORMATS = {".png", ".jpeg", ".jpg", ".bmp", ".tiff", ".tif", ".gif", ".webp"}
     TEXT_FORMATS = {".txt", ".md"}
 
-    logger = logging.getLogger(__name__)
+    def convert_office_to_pdf(self, doc_path: Union[str, Path], output_dir: Optional[Union[str, Path]] = None) -> Path:
+        doc_path = Path(doc_path)
+        if not doc_path.exists():
+            raise FileNotFoundError(doc_path)
 
-    def __init__(self) -> None:
-        """Initialize the base parser."""
-        pass
+        output_dir = Path(output_dir) if output_dir else doc_path.parent / "libreoffice_output"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def convert_office_to_pdf(
-        doc_path: Union[str, Path], output_dir: Optional[str] = None
-    ) -> Path:
-        """Convert Office document to PDF using LibreOffice."""
-        try:
-            doc_path = Path(doc_path)
-            if not doc_path.exists():
-                raise FileNotFoundError(f"Office document does not exist: {doc_path}")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
 
-            name_without_suff = doc_path.stem
+            result = subprocess.run(
+                ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(tmp), str(doc_path)],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                raise MineruExecutionError(result.returncode, result.stderr)
 
-            if output_dir:
-                base_output_dir = Path(output_dir)
-            else:
-                base_output_dir = doc_path.parent / "libreoffice_output"
+            pdf_files = list(tmp.glob("*.pdf"))
+            if not pdf_files:
+                raise RuntimeError("LibreOffice conversion failed (no PDF produced)")
 
-            base_output_dir.mkdir(parents=True, exist_ok=True)
+            out = output_dir / f"{doc_path.stem}.pdf"
+            pdf_files[0].replace(out)
+            return out
 
-            with tempfile.TemporaryDirectory() as temp_dir:
-                temp_path = Path(temp_dir)
-
-                logging.info(f"Converting {doc_path.name} to PDF using LibreOffice...")
-
-                import platform
-
-                commands_to_try = ["libreoffice", "soffice"]
-
-                conversion_successful = False
-                for cmd in commands_to_try:
-                    try:
-                        convert_cmd = [
-                            cmd,
-                            "--headless",
-                            "--convert-to",
-                            "pdf",
-                            "--outdir",
-                            str(temp_path),
-                            str(doc_path),
-                        ]
-
-                        convert_subprocess_kwargs = {
-                            "capture_output": True,
-                            "text": True,
-                            "timeout": 60,
-                            "encoding": "utf-8",
-                            "errors": "ignore",
-                        }
-
-                        if platform.system() == "Windows":
-                            convert_subprocess_kwargs["creationflags"] = (
-                                subprocess.CREATE_NO_WINDOW
-                            )
-
-                        result = subprocess.run(
-                            convert_cmd, **convert_subprocess_kwargs
-                        )
-
-                        if result.returncode == 0:
-                            conversion_successful = True
-                            logging.info(
-                                f"Successfully converted {doc_path.name} to PDF using {cmd}"
-                            )
-                            break
-                        else:
-                            logging.warning(
-                                f"LibreOffice command '{cmd}' failed: {result.stderr}"
-                            )
-                    except FileNotFoundError:
-                        logging.warning(f"LibreOffice command '{cmd}' not found")
-                    except subprocess.TimeoutExpired:
-                        logging.warning(f"LibreOffice command '{cmd}' timed out")
-                    except Exception as e:
-                        logging.error(
-                            f"LibreOffice command '{cmd}' failed with exception: {e}"
-                        )
-
-                if not conversion_successful:
-                    raise RuntimeError(
-                        f"LibreOffice conversion failed for {doc_path.name}"
-                    )
-
-                pdf_files = list(temp_path.glob("*.pdf"))
-                if not pdf_files:
-                    raise RuntimeError(
-                        f"PDF conversion failed for {doc_path.name} - no PDF file generated"
-                    )
-
-                pdf_path = pdf_files[0]
-                logging.info(
-                    f"Generated PDF: {pdf_path.name} ({pdf_path.stat().st_size} bytes)"
-                )
-
-                if pdf_path.stat().st_size < 100:
-                    raise RuntimeError("Generated PDF appears to be empty or corrupted")
-
-                final_pdf_path = base_output_dir / f"{name_without_suff}.pdf"
-                import shutil
-
-                shutil.copy2(pdf_path, final_pdf_path)
-
-                return final_pdf_path
-
-        except Exception as e:
-            logging.error(f"Error in convert_office_to_pdf: {str(e)}")
-            raise
-
-    def parse_document(
-        self,
-        file_path: Union[str, Path],
-        method: str = "auto",
-        output_dir: Optional[str] = None,
-        lang: Optional[str] = None,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        """Parse document và trả về content_list"""
-        raise NotImplementedError("parse_document must be implemented by subclasses")
-
-    def check_installation(self) -> bool:
-        """Check if parser is installed"""
-        raise NotImplementedError(
-            "check_installation must be implemented by subclasses"
-        )
+    def parse_document(self, *args, **kwargs) -> List[Dict[str, str]]:
+        raise NotImplementedError
 
 
 class MineruParser(Parser):
-    """MinerU 2.0 document parsing utility class"""
+    
+    VALID_SECTIONS = {
+        "Abstract", "Background", "Introduction", 
+        "Methods", "Materials And Methods",
+        "Results", "Findings", "Discussion", "Conclusion",
+        "Experiments", "Experiment", "Related Work"
+    }
 
-    __slots__ = ()
-
-    logger = logging.getLogger(__name__)
-
-    def __init__(self) -> None:
-        """Initialize MineruParser"""
-        super().__init__()
-
-    @staticmethod
-    def _run_mineru_command(
-        input_path: Union[str, Path],
-        output_dir: Union[str, Path],
-        method: str = "auto",
-        lang: Optional[str] = None,
-        backend: Optional[str] = None,
-        start_page: Optional[int] = None,
-        end_page: Optional[int] = None,
-        formula: bool = True,
-        table: bool = True,
-        device: Optional[str] = None,
-        source: Optional[str] = None,
-        vlm_url: Optional[str] = None,
-    ) -> None:
-        """Run mineru command line tool"""
-        cmd = [
-            "mineru",
-            "-p",
-            str(input_path),
-            "-o",
-            str(output_dir),
-            "-m",
-            method,
-        ]
-
-        if backend:
-            cmd.extend(["-b", backend])
-        if source:
-            cmd.extend(["--source", source])
+    def _run_mineru(self, input_path: Path, output_dir: Path, method: str = "auto", lang: Optional[str] = None):
+        cmd = ["mineru", "-p", str(input_path), "-o", str(output_dir), "-m", method]
         if lang:
             cmd.extend(["-l", lang])
-        if start_page is not None:
-            cmd.extend(["-s", str(start_page)])
-        if end_page is not None:
-            cmd.extend(["-e", str(end_page)])
-        if not formula:
-            cmd.extend(["-f", "false"])
-        if not table:
-            cmd.extend(["-t", "false"])
-        if device:
-            cmd.extend(["-d", device])
-        if vlm_url:
-            cmd.extend(["-u", vlm_url])
 
-        output_lines = []
-        error_lines = []
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise MineruExecutionError(result.returncode, result.stderr)
 
-        try:
-            import platform
-            import threading
-            from queue import Queue, Empty
+    def clean_text(self, text: str) -> str:
+        """Remove formulas and normalize whitespace"""
+        if not text:
+            return ""
+        # Remove LaTeX formulas
+        text = re.sub(r'\$+[^\$]+\$+', '', text)
+        # Remove superscript citations
+        text = re.sub(r'\^[0-9,\s]+', '', text)
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+    
+    def clean_header(self, header: str) -> str:
+        """Clean section header: remove all non-letter characters except spaces"""
+        cleaned = re.sub(r'[^a-zA-Z\s]', '', header)
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+        return cleaned.strip()
+    
+    def is_subsection_number(self, text: str) -> bool:
+        """
+        Check if text is a subsection number like "2.1", "3.2.1", "2.1.1", etc.
+        Does NOT match main section numbers like "4 Related Work"
+        """
+        text_stripped = text.strip()
+        
+        patterns = [
+            r'^\s*\d+(\.\d+)+\s*$',           # Exact: 2.1, 2.1.1
+            r'^\s*\d+(\s*\.\s*\d+)+\s*$',     # With spaces: 2 . 1
+            r'^\s*\d+(\.\d+)+\s+\w+',         # With text: 2.1 Triple
+        ]
+        
+        for pattern in patterns:
+            if re.match(pattern, text_stripped):
+                return True
+        
+        return False
+    
+    def parse_heading(self, text: str) -> Optional[str]:
+        """Parse heading text to identify section name - handles numbered sections"""
+        # Remove leading numbers (like "4 Related Work" -> "Related Work")
+        text_no_number = re.sub(r'^\s*\d+\s+', '', text)
+        
+        # Remove all non-letters except spaces
+        text_clean = re.sub(r'[^a-zA-Z\s]', '', text_no_number)
+        text_clean = re.sub(r'\s+', ' ', text_clean).strip().lower()
+        
+        section_map = {
+            "abstract": "Abstract",
+            "background": "Background",
+            "introduction": "Introduction",
+            "method": "Methods",
+            "methods": "Methods",
+            "materials and methods": "Methods",
+            "results": "Results",
+            "findings": "Findings",
+            "discussion": "Discussion",
+            "conclusion": "Conclusion",
+            "experiment": "Experiments",
+            "experiments": "Experiments",
+            "related work": "Related Work",
+        }
+        
+        # Exact match
+        if text_clean in section_map:
+            return section_map[text_clean]
+        
+        # Partial match
+        for key, value in section_map.items():
+            if key in text_clean:
+                return value
+        
+        return None
 
-            logging.info(f"Executing mineru command: {' '.join(cmd)}")
-
-            subprocess_kwargs = {
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "encoding": "utf-8",
-                "errors": "ignore",
-                "bufsize": 1,
-            }
-
-            if platform.system() == "Windows":
-                subprocess_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
-            def enqueue_output(pipe, queue, prefix):
-                try:
-                    for line in iter(pipe.readline, ""):
-                        if line.strip():
-                            queue.put((prefix, line.strip()))
-                    pipe.close()
-                except Exception as e:
-                    queue.put((prefix, f"Error reading {prefix}: {e}"))
-
-            process = subprocess.Popen(cmd, **subprocess_kwargs)
-
-            stdout_queue = Queue()
-            stderr_queue = Queue()
-
-            stdout_thread = threading.Thread(
-                target=enqueue_output, args=(process.stdout, stdout_queue, "STDOUT")
-            )
-            stderr_thread = threading.Thread(
-                target=enqueue_output, args=(process.stderr, stderr_queue, "STDERR")
-            )
-
-            stdout_thread.daemon = True
-            stderr_thread.daemon = True
-            stdout_thread.start()
-            stderr_thread.start()
-
-            while process.poll() is None:
-                try:
-                    while True:
-                        prefix, line = stdout_queue.get_nowait()
-                        output_lines.append(line)
-                        logging.info(f"[MinerU] {line}")
-                except Empty:
-                    pass
-
-                try:
-                    while True:
-                        prefix, line = stderr_queue.get_nowait()
-                        if "warning" in line.lower():
-                            logging.warning(f"[MinerU] {line}")
-                        elif "error" in line.lower():
-                            logging.error(f"[MinerU] {line}")
-                            error_message = line.split("\n")[0]
-                            error_lines.append(error_message)
-                        else:
-                            logging.info(f"[MinerU] {line}")
-                except Empty:
-                    pass
-
-                import time
-
-                time.sleep(0.1)
-
-            try:
-                while True:
-                    prefix, line = stdout_queue.get_nowait()
-                    output_lines.append(line)
-                    logging.info(f"[MinerU] {line}")
-            except Empty:
-                pass
-
-            try:
-                while True:
-                    prefix, line = stderr_queue.get_nowait()
-                    if "warning" in line.lower():
-                        logging.warning(f"[MinerU] {line}")
-                    elif "error" in line.lower():
-                        logging.error(f"[MinerU] {line}")
-                        error_message = line.split("\n")[0]
-                        error_lines.append(error_message)
-                    else:
-                        logging.info(f"[MinerU] {line}")
-            except Empty:
-                pass
-
-            return_code = process.wait()
-
-            stdout_thread.join(timeout=5)
-            stderr_thread.join(timeout=5)
-
-            if return_code != 0 or error_lines:
-                logging.info("[MinerU] Command executed failed")
-                raise MineruExecutionError(return_code, error_lines)
+    def process_page(self, items: List[dict], abstract_found: bool, conclusion_found: bool) -> Tuple[List[Dict[str, str]], bool, bool]:
+        """
+        Process page with correct column reading order.
+        Returns list of dicts with type and text.
+        """
+        if not items:
+            return [], abstract_found, conclusion_found
+        
+        # Parse items
+        bbox_items = []
+        for item in items:
+            bbox = item.get("bbox", [])
+            if len(bbox) < 4:
+                continue
+            
+            x_min, y_min, x_max, y_max = bbox
+            text = self.clean_text(item.get("text", ""))
+            text_level = item.get("text_level", 0)
+            
+            if not text:
+                continue
+            
+            bbox_items.append({
+                "x_min": x_min,
+                "y_min": y_min,
+                "x_max": x_max,
+                "y_max": y_max,
+                "text": text,
+                "text_level": text_level,
+                "width": x_max - x_min
+            })
+        
+        if not bbox_items:
+            return [], abstract_found, conclusion_found
+        
+        # Find page width
+        page_width = max(item["x_max"] for item in bbox_items)
+        
+        # Separate by width - items > 50% are full-width
+        full_width = [item for item in bbox_items if item["width"] > page_width * 0.5]
+        normal_items = [item for item in bbox_items if item["width"] <= page_width * 0.5]
+        
+        # Check if full-width items are before Abstract (like title, authors)
+        skip_full_width = False
+        if not abstract_found and normal_items:
+            for item in normal_items:
+                if item["text_level"] == 1 and "abstract" in item["text"].lower():
+                    skip_full_width = True
+                    logging.info("Detected title/author section before column-formatted Abstract - skipping full-width items")
+                    break
+        
+        if skip_full_width:
+            full_width = []
+        
+        # Separate columns
+        if normal_items:
+            x_mins = sorted([item["x_min"] for item in normal_items])
+            
+            if len(x_mins) > 1:
+                gaps = []
+                for i in range(len(x_mins) - 1):
+                    gap = x_mins[i+1] - x_mins[i]
+                    if gap > 50:
+                        gaps.append((gap, x_mins[i+1]))
+                
+                if gaps:
+                    gaps.sort(reverse=True)
+                    x_threshold = gaps[0][1]
+                else:
+                    x_threshold = x_mins[len(x_mins) // 2]
             else:
-                logging.info("[MinerU] Command executed successfully")
-
-        except MineruExecutionError:
-            raise
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Error running mineru subprocess command: {e}")
-            logging.error(f"Command: {' '.join(cmd)}")
-            logging.error(f"Return code: {e.returncode}")
-            raise
-        except FileNotFoundError:
-            raise RuntimeError(
-                "mineru command not found. Please ensure MinerU 2.0 is properly installed"
-            )
-        except Exception as e:
-            error_message = f"Unexpected error running mineru command: {e}"
-            logging.error(error_message)
-            raise RuntimeError(error_message) from e
-
-    @staticmethod
-    def _read_output_files(
-        output_dir: Path, file_stem: str, method: str = "auto"
-    ) -> Tuple[List[Dict[str, Any]], str]:
-        """Read the output files generated by mineru"""
-        md_file = output_dir / f"{file_stem}.md"
-        json_file = output_dir / f"{file_stem}_content_list.json"
-        images_base_dir = output_dir
-
-        file_stem_subdir = output_dir / file_stem
-        if file_stem_subdir.exists():
-            md_file = file_stem_subdir / method / f"{file_stem}.md"
-            json_file = file_stem_subdir / method / f"{file_stem}_content_list.json"
-            images_base_dir = file_stem_subdir / method
-
-        md_content = ""
-        if md_file.exists():
-            try:
-                with open(md_file, "r", encoding="utf-8") as f:
-                    md_content = f.read()
-            except Exception as e:
-                logging.warning(f"Could not read markdown file {md_file}: {e}")
-
-        content_list = []
-        if json_file.exists():
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    content_list = json.load(f)
-
-                logging.info(
-                    f"Fixing image paths in {json_file} with base directory: {images_base_dir}"
-                )
-                for item in content_list:
-                    if isinstance(item, dict):
-                        for field_name in [
-                            "img_path",
-                            "table_img_path",
-                            "equation_img_path",
-                        ]:
-                            if field_name in item and item[field_name]:
-                                img_path = item[field_name]
-                                absolute_img_path = (
-                                    images_base_dir / img_path
-                                ).resolve()
-                                item[field_name] = str(absolute_img_path)
-                                logging.debug(
-                                    f"Updated {field_name}: {img_path} -> {item[field_name]}"
-                                )
-
-            except Exception as e:
-                logging.warning(f"Could not read JSON file {json_file}: {e}")
-
-        return content_list, md_content
-
-    def parse_pdf(
-        self,
-        pdf_path: Union[str, Path],
-        output_dir: Optional[str] = None,
-        method: str = "auto",
-        lang: Optional[str] = None,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        """Parse PDF document using MinerU 2.0"""
-        try:
-            pdf_path = Path(pdf_path)
-            if not pdf_path.exists():
-                raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
-
-            name_without_suff = pdf_path.stem
-
-            if output_dir:
-                base_output_dir = Path(output_dir)
+                x_threshold = page_width * 0.5
+            
+            left_column = [item for item in normal_items if item["x_min"] < x_threshold]
+            right_column = [item for item in normal_items if item["x_min"] >= x_threshold]
+        else:
+            left_column = []
+            right_column = []
+        
+        logging.info(f"Full-width: {len(full_width)}, Left: {len(left_column)}, Right: {len(right_column)}")
+        
+        # Sort each column by y_min
+        full_width.sort(key=lambda x: x["y_min"])
+        left_column.sort(key=lambda x: x["y_min"])
+        right_column.sort(key=lambda x: x["y_min"])
+        
+        # CORRECT ORDER: full-width, then left column, then right column
+        all_items = full_width + left_column + right_column
+        
+        # Process in order
+        result = []
+        
+        for item in all_items:
+            # Check for Abstract
+            if item["text_level"] == 1 and "abstract" in item["text"].lower():
+                abstract_found = True
+                logging.info(f"✓ Found Abstract")
+            
+            # Check for Conclusion
+            if item["text_level"] == 1 and "conclusion" in item["text"].lower():
+                conclusion_found = True
+                logging.info(f"✓ Found Conclusion")
+            
+            # Skip before Abstract
+            if not abstract_found:
+                logging.info(f"  Skip (before Abstract): {item['text'][:40]}...")
+                continue
+            
+            # Stop after Conclusion (except Conclusion itself)
+            if conclusion_found:
+                section_name = self.parse_heading(item["text"]) if item["text_level"] == 1 else None
+                if section_name and section_name not in ["Conclusion"]:
+                    logging.info(f"  Stop: reached {section_name} after Conclusion")
+                    break
+            
+            # Process item
+            if item["text_level"] == 1:
+                # Skip subsection numbers
+                if self.is_subsection_number(item["text"]):
+                    logging.info(f"  Skip subsection number: {item['text']}")
+                    continue
+                
+                section_name = self.parse_heading(item["text"])
+                if section_name and section_name in self.VALID_SECTIONS:
+                    cleaned_header = self.clean_header(section_name)
+                    result.append({
+                        "type": "section",
+                        "text": cleaned_header
+                    })
+                    logging.info(f"  + Section: {cleaned_header}")
+                elif section_name:
+                    logging.info(f"  Skip invalid subsection header: {item['text']}")
+                else:
+                    result.append({
+                        "type": "content",
+                        "text": item["text"]
+                    })
+                    logging.info(f"  + Content (level=1): {item['text'][:40]}...")
             else:
-                base_output_dir = pdf_path.parent / "mineru_output"
+                result.append({
+                    "type": "content",
+                    "text": item["text"]
+                })
+                logging.info(f"  + Content: {item['text'][:40]}...")
+        
+        return result, abstract_found, conclusion_found
 
-            base_output_dir.mkdir(parents=True, exist_ok=True)
+    def parse_pdf(self, pdf_path: Union[str, Path], output_dir: Optional[Union[str, Path]] = None, method: str = "auto", lang: Optional[str] = None) -> List[Dict[str, str]]:
+        pdf_path = Path(pdf_path)
+        if not pdf_path.exists():
+            raise FileNotFoundError(pdf_path)
 
-            self._run_mineru_command(
-                input_path=pdf_path,
-                output_dir=base_output_dir,
-                method=method,
-                lang=lang,
-                **kwargs,
+        base_out = Path(output_dir) if output_dir else pdf_path.parent / "mineru_output"
+        base_out.mkdir(parents=True, exist_ok=True)
+
+        # Run MinerU
+        self._run_mineru(pdf_path, base_out, method, lang)
+
+        # Find content_list.json
+        possible_paths = [
+            base_out / pdf_path.stem / method / f"{pdf_path.stem}_content_list.json",
+            base_out / pdf_path.stem / f"{pdf_path.stem}_content_list.json",
+            base_out / f"{pdf_path.stem}_content_list.json",
+        ]
+        
+        contents_json = None
+        for path in possible_paths:
+            if path.exists():
+                contents_json = path
+                logging.info(f"Found content_list.json at: {path}")
+                break
+        
+        if not contents_json:
+            raise FileNotFoundError(
+                f"content_list.json not found. Checked:\n" +
+                "\n".join(f"  - {p}" for p in possible_paths)
             )
 
-            backend = kwargs.get("backend", "")
-            if backend.startswith("vlm-"):
-                method = "vlm"
+        # Load JSON
+        with open(contents_json, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        logging.info(f"Loaded {len(data)} items from JSON")
 
-            content_list, _ = self._read_output_files(
-                base_output_dir, name_without_suff, method=method
+        # Group by page
+        pages = {}
+        for item in data:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            page_idx = item.get("page_idx", -1)
+            if page_idx not in pages:
+                pages[page_idx] = []
+            pages[page_idx].append(item)
+        
+        logging.info(f"Found {len(pages)} pages")
+        
+        result = []
+        abstract_found = False
+        conclusion_found = False
+        
+        for page_idx in sorted(pages.keys()):
+            if conclusion_found:
+                break
+            logging.info(f"\n--- Page {page_idx} ---")
+            page_result, abstract_found, conclusion_found = self.process_page(
+                pages[page_idx], abstract_found, conclusion_found
             )
-            return content_list
+            result.extend(page_result)
+        
+        if not result:
+            logging.warning(f"No text extracted from {pdf_path.name}")
+            return [{"type": "content", "text": "[No text content found]"}]
+        
+        return result
 
-        except MineruExecutionError:
-            raise
-        except Exception as e:
-            logging.error(f"Error in parse_pdf: {str(e)}")
-            raise
-
-    def parse_document(
-        self,
-        file_path: Union[str, Path],
-        method: str = "auto",
-        output_dir: Optional[str] = None,
-        lang: Optional[str] = None,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        """Parse document based on file extension"""
+    def parse_document(self, file_path: Union[str, Path], method: str = "auto", output_dir: Optional[Union[str, Path]] = None, lang: Optional[str] = None, **kwargs) -> List[Dict[str, str]]:
         file_path = Path(file_path)
         if not file_path.exists():
-            raise FileNotFoundError(f"File does not exist: {file_path}")
+            raise FileNotFoundError(file_path)
 
         ext = file_path.suffix.lower()
 
-        if ext == ".pdf":
-            return self.parse_pdf(file_path, output_dir, method, lang, **kwargs)
-        else:
-            logging.warning(
-                f"Warning: Unsupported file extension '{ext}', attempting to parse as PDF"
-            )
-            return self.parse_pdf(file_path, output_dir, method, lang, **kwargs)
+        if ext in self.TEXT_FORMATS:
+            content = file_path.read_text(encoding="utf-8").strip()
+            return [{"type": "content", "text": content}]
+
+        if ext in self.OFFICE_FORMATS:
+            pdf = self.convert_office_to_pdf(file_path, output_dir)
+            return self.parse_pdf(pdf, output_dir, method, lang)
+
+        return self.parse_pdf(file_path, output_dir, method, lang)
 
     def check_installation(self) -> bool:
-        """Check if MinerU 2.0 is properly installed"""
         try:
-            import platform
-
-            subprocess_kwargs = {
-                "capture_output": True,
-                "text": True,
-                "check": True,
-                "encoding": "utf-8",
-                "errors": "ignore",
-            }
-
-            if platform.system() == "Windows":
-                subprocess_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
-            result = subprocess.run(["mineru", "--version"], **subprocess_kwargs)
-            logging.debug(f"MinerU version: {result.stdout.strip()}")
+            subprocess.run(["mineru", "--version"], capture_output=True, text=True, check=True)
             return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logging.debug("MinerU 2.0 is not properly installed")
-            return False
-
-
-class DoclingParser(Parser):
-    """Docling document parsing utility class."""
-
-    HTML_FORMATS = {".html", ".htm", ".xhtml"}
-
-    def __init__(self) -> None:
-        """Initialize DoclingParser"""
-        super().__init__()
-
-    def parse_document(
-        self,
-        file_path: Union[str, Path],
-        method: str = "auto",
-        output_dir: Optional[str] = None,
-        lang: Optional[str] = None,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        """Parse document using Docling"""
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File does not exist: {file_path}")
-
-        ext = file_path.suffix.lower()
-
-        if ext == ".pdf":
-            return self.parse_pdf(file_path, output_dir, method, lang, **kwargs)
-        else:
-            raise ValueError(f"Unsupported file format: {ext}")
-
-    def parse_pdf(
-        self,
-        pdf_path: Union[str, Path],
-        output_dir: Optional[str] = None,
-        method: str = "auto",
-        lang: Optional[str] = None,
-        **kwargs,
-    ) -> List[Dict[str, Any]]:
-        """Parse PDF using Docling"""
-        # Simplified Docling implementation
-        raise NotImplementedError("Docling parser not fully implemented in this version")
-
-    def check_installation(self) -> bool:
-        """Check if Docling is properly installed"""
-        try:
-            import platform
-
-            subprocess_kwargs = {
-                "capture_output": True,
-                "text": True,
-                "check": True,
-                "encoding": "utf-8",
-                "errors": "ignore",
-            }
-
-            if platform.system() == "Windows":
-                subprocess_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-
-            result = subprocess.run(["docling", "--version"], **subprocess_kwargs)
-            logging.debug(f"Docling version: {result.stdout.strip()}")
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            logging.debug("Docling is not properly installed")
+        except Exception:
             return False

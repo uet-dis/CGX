@@ -1,289 +1,326 @@
-"""
-Multimodal Content Processor
-Xử lý và phân tích multimodal content, tạo output folder với enhanced descriptions
-"""
-
 import json
 import logging
-from typing import Dict, List, Any, Optional
+import re
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional
+from textbuilder.formatter import build_pubmed_txt
 
 
-class MultimodalProcessor:
-    """Processor để xử lý multimodal content và tạo output"""
+class TextProcessor:
 
-    def __init__(self, output_dir: str = "./output"):
-        """
-        Initialize processor
-
-        Args:
-            output_dir: Thư mục output để lưu kết quả
-        """
+    def __init__(self, output_dir="./output"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.logger = logging.getLogger(__name__)
+        self.log = logging.getLogger(__name__)
 
-    def separate_content(
-        self, content_list: List[Dict[str, Any]]
-    ) -> tuple[str, List[Dict[str, Any]]]:
+    def process_document(self, text_blocks: List[Dict[str, str]], doc_name="document") -> Path:
         """
-        Tách nội dung text và multimodal
-
+        Process text blocks into formatted PubMed-style output.
+        
         Args:
-            content_list: Content list từ parser
-
+            text_blocks: List of dicts with {"type": "section"|"content", "text": str}
+            doc_name: Output file name (without extension)
+        
         Returns:
-            (text_content, multimodal_items): Text thuần và multimodal items
+            Path to output txt file
         """
-        text_parts = []
-        multimodal_items = []
+        self.log.info(f"Processing {len(text_blocks)} text blocks")
+        
+        if not text_blocks:
+            self.log.warning("No text blocks to process!")
+            out = self.output_dir / f"{doc_name}.txt"
+            out.write_text("", encoding="utf-8")
+            return out
+        
+        # Group blocks by section
+        sections = self._group_by_sections(text_blocks)
+        
+        self.log.info(f"Detected sections: {list(sections.keys())}")
 
-        for item in content_list:
-            content_type = item.get("type", "text")
+        # Format to PubMed style
+        try:
+            formatted = build_pubmed_txt(sections)
+            self.log.info(f"Formatted text: {len(formatted)} chars")
+        except Exception as e:
+            self.log.error(f"Formatting failed: {e}")
+            # Fallback: join all content
+            formatted = "\n".join(item["text"] for item in text_blocks)
 
-            if content_type == "text":
-                text = item.get("text", "")
-                if text.strip():
-                    text_parts.append(text)
+        # Write output file
+        out = self.output_dir / f"{doc_name}.txt"
+        out.write_text(formatted, encoding="utf-8")
+
+        self.log.info(f"TXT saved to {out}")
+        
+        # Verify
+        if out.exists():
+            self.log.info(f"File verified: {out.stat().st_size} bytes")
+        
+        return out
+
+    # ===== Integrated bbox-json processing (from test_bbox.py) =====
+
+    def process_content_list_json(self, json_path: str, doc_name: str = "document") -> Path:
+        """Full pipeline: content_list.json -> text_blocks -> formatted TXT.
+
+        This integrates the bbox parsing logic from test_bbox.py
+        so you can process MinerU JSON output directly.
+        """
+        json_path = Path(json_path)
+        if not json_path.exists():
+            raise FileNotFoundError(f"File not found: {json_path}")
+
+        self.log.info(f"Loading JSON from: {json_path}")
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.log.info(f"Loaded {len(data)} items")
+
+        items = self._extract_text_with_bbox(data)
+        return self.process_document(items, doc_name=doc_name)
+
+    VALID_SECTIONS = {
+        "Abstract", "Background", "Introduction",
+        "Methods", "Materials And Methods",
+        "Results", "Findings", "Discussion", "Conclusion",
+        "Experiments", "Experiment", "Related Work",
+    }
+
+    def _extract_text_with_bbox(self, data: List[dict]) -> List[Dict[str, str]]:
+        """Returns list of dicts with 'type': 'section'|'content', 'text'."""
+        if not isinstance(data, list):
+            return []
+
+        pages: Dict[int, List[dict]] = {}
+        for item in data:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            page_idx = item.get("page_idx", -1)
+            pages.setdefault(page_idx, []).append(item)
+
+        self.log.info(f"Found {len(pages)} pages")
+
+        result: List[Dict[str, str]] = []
+        abstract_found = False
+        conclusion_found = False
+
+        for page_idx in sorted(pages.keys()):
+            if conclusion_found:
+                break
+            self.log.info(f"\n--- Page {page_idx} ---")
+            page_result, abstract_found, conclusion_found = self._process_page(
+                pages[page_idx], abstract_found, conclusion_found
+            )
+            result.extend(page_result)
+
+        return result
+
+    def _process_page(
+        self,
+        items: List[dict],
+        abstract_found: bool,
+        conclusion_found: bool,
+    ) -> Tuple[List[Dict[str, str]], bool, bool]:
+        """Process one page with correct column reading order."""
+        if not items:
+            return [], abstract_found, conclusion_found
+
+        bbox_items = []
+        for item in items:
+            bbox = item.get("bbox", [])
+            if len(bbox) < 4:
+                continue
+
+            x_min, y_min, x_max, y_max = bbox
+            text = self._clean_text(item.get("text", ""))
+            text_level = item.get("text_level", 0)
+
+            if not text:
+                continue
+
+            bbox_items.append(
+                {
+                    "x_min": x_min,
+                    "y_min": y_min,
+                    "x_max": x_max,
+                    "y_max": y_max,
+                    "text": text,
+                    "text_level": text_level,
+                    "width": x_max - x_min,
+                }
+            )
+
+        if not bbox_items:
+            return [], abstract_found, conclusion_found
+
+        page_width = max(item["x_max"] for item in bbox_items)
+
+        full_width = [item for item in bbox_items if item["width"] > page_width * 0.5]
+        normal_items = [item for item in bbox_items if item["width"] <= page_width * 0.5]
+
+        skip_full_width = False
+        if not abstract_found and normal_items:
+            for item in normal_items:
+                if item["text_level"] == 1 and "abstract" in item["text"].lower():
+                    skip_full_width = True
+                    self.log.info(
+                        "Detected title/author section before column-formatted Abstract - skipping full-width items"
+                    )
+                    break
+
+        if skip_full_width:
+            full_width = []
+
+        if normal_items:
+            x_mins = sorted(item["x_min"] for item in normal_items)
+            if len(x_mins) > 1:
+                gaps = []
+                for i in range(len(x_mins) - 1):
+                    gap = x_mins[i + 1] - x_mins[i]
+                    if gap > 50:
+                        gaps.append((gap, x_mins[i + 1]))
+
+                if gaps:
+                    gaps.sort(reverse=True)
+                    x_threshold = gaps[0][1]
+                else:
+                    x_threshold = x_mins[len(x_mins) // 2]
             else:
-                # Image, table, equation, etc.
-                multimodal_items.append(item)
+                x_threshold = page_width * 0.5
 
-        text_content = "\n\n".join(text_parts)
-
-        self.logger.info("Content separation complete:")
-        self.logger.info(f"  - Text content length: {len(text_content)} characters")
-        self.logger.info(f"  - Multimodal items count: {len(multimodal_items)}")
-
-        # Count multimodal types
-        modal_types = {}
-        for item in multimodal_items:
-            modal_type = item.get("type", "unknown")
-            modal_types[modal_type] = modal_types.get(modal_type, 0) + 1
-
-        if modal_types:
-            self.logger.info(f"  - Multimodal type distribution: {modal_types}")
-
-        return text_content, multimodal_items
-
-    def process_document(
-        self, content_list: List[Dict[str, Any]], doc_name: str = "document"
-    ) -> Dict[str, Any]:
-        """
-        Xử lý toàn bộ document và tạo output
-
-        Args:
-            content_list: Content list từ parser
-            doc_name: Tên document để đặt tên output file
-
-        Returns:
-            Dictionary chứa thông tin kết quả xử lý
-        """
-        self.logger.info(f"Processing document: {doc_name}")
-
-        # Tách text và multimodal
-        text_content, multimodal_items = self.separate_content(content_list)
-
-        # Tạo output structure
-        output = {
-            "document_name": doc_name,
-            "text_content": text_content,
-            "text_length": len(text_content),
-            "multimodal_items": [],
-            "statistics": {
-                "total_items": len(content_list),
-                "text_items": len(content_list) - len(multimodal_items),
-                "multimodal_items": len(multimodal_items),
-            },
-        }
-
-        # Process từng multimodal item
-        for idx, item in enumerate(multimodal_items):
-            processed_item = self._process_multimodal_item(item, idx)
-            output["multimodal_items"].append(processed_item)
-
-        # Lưu output
-        output_file = self.output_dir / f"{doc_name}_processed.json"
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(output, f, ensure_ascii=False, indent=2)
-
-        self.logger.info(f"Output saved to: {output_file}")
-
-        # Tạo markdown summary
-        self._create_markdown_summary(output, doc_name)
-
-        return output
-
-    def _process_multimodal_item(
-        self, item: Dict[str, Any], index: int
-    ) -> Dict[str, Any]:
-        """
-        Xử lý một multimodal item
-
-        Args:
-            item: Multimodal item từ content_list
-            index: Index của item
-
-        Returns:
-            Processed item với enhanced information
-        """
-        content_type = item.get("type", "unknown")
-
-        processed = {
-            "index": index,
-            "type": content_type,
-            "page_idx": item.get("page_idx", 0),
-            "raw_data": item,
-        }
-
-        # Process theo từng loại
-        if content_type == "image":
-            processed["enhanced_info"] = self._process_image(item)
-        elif content_type == "table":
-            processed["enhanced_info"] = self._process_table(item)
-        elif content_type == "equation":
-            processed["enhanced_info"] = self._process_equation(item)
+            left_column = [item for item in normal_items if item["x_min"] < x_threshold]
+            right_column = [item for item in normal_items if item["x_min"] >= x_threshold]
         else:
-            processed["enhanced_info"] = self._process_generic(item)
+            left_column = []
+            right_column = []
 
-        return processed
+        self.log.info(
+            f"Full-width: {len(full_width)}, Left: {len(left_column)}, Right: {len(right_column)}"
+        )
 
-    def _process_image(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """Process image item"""
-        return {
-            "image_path": item.get("img_path", ""),
-            "captions": item.get("image_caption", item.get("img_caption", [])),
-            "footnotes": item.get("image_footnote", item.get("img_footnote", [])),
-            "description": "Image content - requires vision model for detailed analysis",
+        full_width.sort(key=lambda x: x["y_min"])
+        left_column.sort(key=lambda x: x["y_min"])
+        right_column.sort(key=lambda x: x["y_min"])
+
+        all_items = full_width + left_column + right_column
+
+        result: List[Dict[str, str]] = []
+
+        for item in all_items:
+            if item["text_level"] == 1 and "abstract" in item["text"].lower():
+                abstract_found = True
+                self.log.info("✓ Found Abstract")
+
+            if item["text_level"] == 1 and "conclusion" in item["text"].lower():
+                conclusion_found = True
+                self.log.info("✓ Found Conclusion")
+
+            if not abstract_found:
+                self.log.info(f"  Skip (before Abstract): {item['text'][:40]}...")
+                continue
+
+            if conclusion_found:
+                section_name = (
+                    self._parse_heading(item["text"]) if item["text_level"] == 1 else None
+                )
+                if section_name and section_name not in ["Conclusion"]:
+                    self.log.info(f"  Stop: reached {section_name} after Conclusion")
+                    break
+
+            if item["text_level"] == 1:
+                if self._is_subsection_number(item["text"]):
+                    self.log.info(f"  Skip subsection number: {item['text']}")
+                    continue
+
+                section_name = self._parse_heading(item["text"])
+                if section_name and section_name in self.VALID_SECTIONS:
+                    cleaned_header = self._clean_header(section_name)
+                    result.append({"type": "section", "text": cleaned_header})
+                    self.log.info(f"  + Section: {cleaned_header}")
+                elif section_name:
+                    self.log.info(
+                        f"  Skip invalid subsection header: {item['text']}"
+                    )
+                else:
+                    result.append({"type": "content", "text": item["text"]})
+                    self.log.info(
+                        f"  + Content (level=1): {item['text'][:40]}..."
+                    )
+            else:
+                result.append({"type": "content", "text": item["text"]})
+                self.log.info(f"  + Content: {item['text'][:40]}...")
+
+        return result, abstract_found, conclusion_found
+
+    def _clean_text(self, text: str) -> str:
+        if not text:
+            return ""
+        text = re.sub(r"\$+[^\$]+\$+", "", text)
+        text = re.sub(r"\^[0-9,\s]+", "", text)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
+
+    def _clean_header(self, header: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z\s]", "", header)
+        cleaned = re.sub(r"\s+", " ", cleaned)
+        return cleaned.strip()
+
+    def _is_subsection_number(self, text: str) -> bool:
+        text_stripped = text.strip()
+        patterns = [
+            r"^\s*\d+(\.\d+)+\s*$",
+            r"^\s*\d+(\s*\.\s*\d+)+\s*$",
+            r"^\s*\d+(\.\d+)+\s+\w+",
+        ]
+        for pattern in patterns:
+            if re.match(pattern, text_stripped):
+                return True
+        return False
+
+    def _parse_heading(self, text: str) -> Optional[str]:
+        text_no_number = re.sub(r"^\s*\d+\s+", "", text)
+        text_clean = re.sub(r"[^a-zA-Z\s]", "", text_no_number)
+        text_clean = re.sub(r"\s+", " ", text_clean).strip().lower()
+
+        section_map = {
+            "abstract": "Abstract",
+            "background": "Background",
+            "introduction": "Introduction",
+            "method": "Methods",
+            "methods": "Methods",
+            "materials and methods": "Methods",
+            "results": "Results",
+            "findings": "Findings",
+            "discussion": "Discussion",
+            "conclusion": "Conclusion",
+            "experiment": "Experiments",
+            "experiments": "Experiments",
+            "related work": "Related Work",
         }
 
-    def _process_table(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """Process table item"""
-        return {
-            "table_caption": item.get("table_caption", []),
-            "table_body": item.get("table_body", ""),
-            "table_footnote": item.get("table_footnote", []),
-            "description": "Table content - structure and data extracted",
-        }
+        if text_clean in section_map:
+            return section_map[text_clean]
 
-    def _process_equation(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """Process equation item"""
-        return {
-            "equation_text": item.get("text", ""),
-            "equation_format": item.get("text_format", ""),
-            "description": "Mathematical equation content",
-        }
+        for key, value in section_map.items():
+            if key in text_clean:
+                return value
 
-    def _process_generic(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """Process generic content"""
-        return {
-            "content": str(item),
-            "description": f"Generic {item.get('type', 'unknown')} content",
-        }
+        return None
 
-    def _create_markdown_summary(
-        self, output: Dict[str, Any], doc_name: str
-    ) -> None:
+    def _group_by_sections(self, blocks: List[Dict[str, str]]) -> Dict[str, str]:
         """
-        Tạo markdown summary file
-
-        Args:
-            output: Output dictionary
-            doc_name: Document name
+        Group blocks by section.
+        Returns: {section_name: content_string}
         """
-        md_file = self.output_dir / f"{doc_name}_summary.md"
-
-        with open(md_file, "w", encoding="utf-8") as f:
-            f.write(f"# Document Summary: {doc_name}\n\n")
-            f.write("## Statistics\n\n")
-            f.write(
-                f"- Total items: {output['statistics']['total_items']}\n"
-            )
-            f.write(
-                f"- Text items: {output['statistics']['text_items']}\n"
-            )
-            f.write(
-                f"- Multimodal items: {output['statistics']['multimodal_items']}\n"
-            )
-            f.write(f"- Text length: {output['text_length']} characters\n\n")
-
-            f.write("## Text Content\n\n")
-            f.write(f"```\n{output['text_content'][:500]}...\n```\n\n")
-
-            f.write("## Multimodal Items\n\n")
-            for item in output["multimodal_items"]:
-                f.write(f"### Item {item['index']}: {item['type']}\n\n")
-                f.write(f"- Page: {item['page_idx']}\n")
-                f.write(f"- Type: {item['type']}\n")
-
-                if item["type"] == "image":
-                    info = item["enhanced_info"]
-                    f.write(f"- Image path: {info.get('image_path', 'N/A')}\n")
-                    f.write(f"- Captions: {info.get('captions', [])}\n")
-                elif item["type"] == "table":
-                    info = item["enhanced_info"]
-                    f.write(f"- Caption: {info.get('table_caption', [])}\n")
-                elif item["type"] == "equation":
-                    info = item["enhanced_info"]
-                    f.write(f"- Equation: {info.get('equation_text', 'N/A')}\n")
-
-                f.write(f"- Description: {item['enhanced_info'].get('description', 'N/A')}\n\n")
-
-        self.logger.info(f"Markdown summary saved to: {md_file}")
-
-
-def main():
-    """Main function để test processor"""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Process multimodal documents"
-    )
-    parser.add_argument("file_path", help="Path to document file")
-    parser.add_argument(
-        "--output", "-o", default="./output", help="Output directory"
-    )
-    parser.add_argument(
-        "--method", "-m", default="auto", choices=["auto", "txt", "ocr"],
-        help="Parsing method"
-    )
-
-    args = parser.parse_args()
-
-    # Setup logging
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-    )
-
-    # Parse document
-    from .parser import MineruParser
-
-    doc_parser = MineruParser()
-
-    if not doc_parser.check_installation():
-        print("❌ MinerU is not installed. Please install it first.")
-        return 1
-
-    print(f"📄 Parsing document: {args.file_path}")
-    content_list = doc_parser.parse_document(
-        args.file_path, method=args.method, output_dir=args.output
-    )
-
-    print(f"✅ Parsed {len(content_list)} content blocks")
-
-    # Process multimodal
-    processor = MultimodalProcessor(output_dir=args.output)
-    doc_name = Path(args.file_path).stem
-
-    result = processor.process_document(content_list, doc_name)
-
-    print(f"\n📊 Processing Results:")
-    print(f"  - Text items: {result['statistics']['text_items']}")
-    print(f"  - Multimodal items: {result['statistics']['multimodal_items']}")
-    print(f"  - Output saved to: {args.output}")
-
-    return 0
-
-
-if __name__ == "__main__":
-    exit(main())
+        sections = {}
+        current_section = None
+        
+        for item in blocks:
+            if item["type"] == "section":
+                current_section = item["text"]
+                sections[current_section] = []
+            elif item["type"] == "content":
+                if current_section:
+                    sections[current_section].append(item["text"])
+        
+        # Join content lines with newline (no blank lines within section)
+        return {k: "\n".join(v) for k, v in sections.items() if v}
