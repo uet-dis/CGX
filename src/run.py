@@ -1,11 +1,7 @@
 import os
-from getpass import getpass
 from camel.storages import Neo4jGraph
-from camel.agents import KnowledgeGraphAgent
-from camel.loaders import UnstructuredIO
 from dataloader import load_high
 import argparse
-from data_chunk import run_chunk
 from creat_graph_with_description import creat_metagraph_with_description
 from summerize import process_chunks
 from retrieve import seq_ret
@@ -34,7 +30,6 @@ if args.simple:
     with open("./dataset_ex/report_0.txt") as f:
         graph_func.insert(f.read())
 
-    # Perform local graphrag search (I think is better and more scalable one)
     print(graph_func.query("What is the main symptom of the patient?", param=QueryParam(mode="local")))
 
 else:
@@ -46,15 +41,14 @@ else:
     # Set Neo4j instance
     n4j = Neo4jGraph(
         url=url,
-        username=username,             # Default username
-        password=password     # Replace 'yourpassword' with your actual password
+        username=username,
+        password=password
     )
 
     if args.construct_graph: 
         if args.dataset == 'mimic_ex':
             files = [file for file in os.listdir(args.data_path) if os.path.isfile(os.path.join(args.data_path, file))]
             
-            # Read and print the contents of each file
             for file_name in files:
                 file_path = os.path.join(args.data_path, file_name)
                 content = load_high(file_path)
@@ -71,15 +65,14 @@ else:
         
         question = load_high("./prompt.txt")
         
-        # Create dedicated client for inference
         inference_client = create_dedicated_client(task_id="inference_main")
         sum = process_chunks(question, client=inference_client)
         gid = seq_ret(n4j, sum)
         
         if gid is None:
-            print("\n❌ Cannot perform inference - database is empty or no valid results found.")
-            print("💡 Run the following command first to build the graph:")
-            print("   python run.py -dataset mimic_ex -data_path ../data/mimic_ex -construct_graph")
+            print("\nCannot perform inference - database is empty or no valid results found.")
+            print("Run the following command first to build the graph:")
+            print("python run.py -dataset mimic_ex -data_path ../data/mimic_ex -construct_graph")
         else:
             response = get_response(n4j, gid, question)
             print(response)
