@@ -47,7 +47,6 @@ def call_openai_api(chunk, client=None):
         raise ValueError("Client must be provided to call_openai_api()")
     
     full_prompt = f"{sum_prompt}\n\n{chunk}"
-    # Use dedicated client's call_with_retry (already has model parameter)
     return client.call_with_retry(
         full_prompt, 
         model="models/gemini-2.5-flash-lite",
@@ -73,22 +72,17 @@ def process_chunks(content, client=None):
     
     chunks = split_into_chunks(content)
     
-    # If no client provided, create ONE client for ALL chunks
     if client is None:
         client = create_dedicated_client(task_id="summerize_standalone")
 
-    # Processes chunks in parallel, passing THE SAME client to each call
     from functools import partial
     call_with_client = partial(call_openai_api, client=client)
     
     with ThreadPoolExecutor() as executor:
         responses = list(executor.map(call_with_client, chunks))
-    # print(responses)
     return responses
 
 
 if __name__ == "__main__":
     content = " sth you wanna test"
     process_chunks(content)
-
-# Can take up to a few minutes to run depending on the size of your data input
