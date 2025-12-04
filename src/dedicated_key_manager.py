@@ -16,8 +16,8 @@ logger = get_logger("dedicated_key_manager", log_file="logs/dedicated_key_manage
 
 class DedicatedKeyManager:
     """
-    Manager phân phối keys độc quyền cho từng task
-    Mỗi task nhận 1 key riêng, tránh conflict khi chạy song song
+    Manager for dedicated Gemini API keys
+    Each task/file gets its own key to avoid rate limit conflicts
     """
     _instance = None
     _lock = Lock()
@@ -35,10 +35,9 @@ class DedicatedKeyManager:
             return
         
         self.api_keys = []
-        self.key_assignments = {}  # {task_id: key_index}
-        self.key_in_use = set()    # Set of key indices currently in use
+        self.key_assignments = {}
+        self.key_in_use = set()
         
-        # Load all keys
         i = 1
         while True:
             key = os.getenv(f"GEMINI_API_KEY_{i}")
@@ -51,9 +50,9 @@ class DedicatedKeyManager:
         if not self.api_keys:
             raise ValueError("No GEMINI_API_KEY found in environment")
         
-        logger.info(f"🔑 [DEDICATED] Loaded {len(self.api_keys)} Gemini API keys")
-        logger.info(f"📌 [DEDICATED] Each task will get 1 dedicated key")
-        logger.info(f"⏱️  [DEDICATED] Rate limit: 15 RPM = 1 request every 4 seconds per key")
+        logger.info(f"[DEDICATED] Loaded {len(self.api_keys)} Gemini API keys")
+        logger.info(f"[DEDICATED] Each task will get 1 dedicated key")
+        logger.info(f"[DEDICATED] Rate limit: 15 RPM = 1 request every 4 seconds per key")
         
         self._initialized = True
     
@@ -72,50 +71,47 @@ class DedicatedKeyManager:
             
             exclude_keys = exclude_keys or set()
             
-            # Check if task already has a key AND not in exclude list
             if task_id in self.key_assignments:
                 key_idx = self.key_assignments[task_id]
                 if key_idx not in exclude_keys:
-                    logger.info(f"♻️  [DEDICATED] Task {task_id[:8]} reusing key #{key_idx + 1}")
+                    logger.info(f"[DEDICATED] Task {task_id[:8]} reusing key #{key_idx + 1}")
                     return key_idx, self.api_keys[key_idx]
                 else:
-                    # Key is excluded, need to rotate
-                    logger.warning(f"🔄 [DEDICATED] Key #{key_idx + 1} excluded, rotating for task {task_id[:8]}")
+                    logger.warning(f"[DEDICATED] Key #{key_idx + 1} excluded, rotating for task {task_id[:8]}")
                     self.key_in_use.discard(key_idx)
                     del self.key_assignments[task_id]
             
-            # Find first available key (not in use AND not excluded)
             available_keys = [i for i in range(len(self.api_keys)) 
                             if i not in self.key_in_use and i not in exclude_keys]
             
             if not available_keys:
-                # All keys in use or excluded, pick from non-excluded keys
                 non_excluded = [i for i in range(len(self.api_keys)) if i not in exclude_keys]
                 if not non_excluded:
                     raise Exception(f"All {len(self.api_keys)} keys have been tried and failed!")
                 
                 key_idx = random.choice(non_excluded)
-                logger.warning(f"⚠️  [DEDICATED] All keys in use. Sharing key #{key_idx + 1} for task {task_id[:8]}")
+                logger.warning(f"[DEDICATED] All keys in use. Sharing key #{key_idx + 1} for task {task_id[:8]}")
             else:
-                # Pick random from available keys to distribute load
                 key_idx = random.choice(available_keys)
                 self.key_in_use.add(key_idx)
-                logger.info(f"✅ [DEDICATED] Assigned key #{key_idx + 1} to task {task_id[:8]}")
+                logger.info(f"[DEDICATED] Assigned key #{key_idx + 1} to task {task_id[:8]}")
             
             self.key_assignments[task_id] = key_idx
             return key_idx, self.api_keys[key_idx]
     
     def release_key(self, task_id):
-        """Release key khi task hoàn thành"""
+        """
+        Release key when task is completed
+        """
         with self._lock:
             if task_id in self.key_assignments:
                 key_idx = self.key_assignments[task_id]
                 self.key_in_use.discard(key_idx)
                 del self.key_assignments[task_id]
-                logger.info(f"🔓 [DEDICATED] Released key #{key_idx + 1} from task {task_id[:8]}")
+                logger.info(f"[DEDICATED] Released key #{key_idx + 1} from task {task_id[:8]}")
     
     def get_stats(self):
-        """Thống kê về key usage"""
+        """Statistics about key usage"""
         with self._lock:
             return {
                 'total_keys': len(self.api_keys),
@@ -127,7 +123,7 @@ class DedicatedKeyManager:
 
 class DedicatedKeyClient:
     """
-    Client sử dụng 1 key độc quyền với rate limiting + auto rotation
+    Client uses 1 dedicated key with rate limiting + auto rotation
     Rate limit: 15 requests/minute = 1 request every 4 seconds
     Auto-rotates to new key if current key fails after max retries
     """
@@ -135,41 +131,40 @@ class DedicatedKeyClient:
     def __init__(self, task_id=None):
         self.manager = DedicatedKeyManager()
         self.task_id = task_id or f"task_{id(self)}"
-        self.failed_keys = set()  # Track keys that failed for this client
+        self.failed_keys = set()
         
-        # Get initial key
         self.key_index, self.api_key = self.manager.assign_key(self.task_id)
         self.genai_client = genai.Client(api_key=self.api_key)
         
-        # Rate limiting: 15 RPM = 4 seconds between requests
         self.min_delay_between_requests = 4.0
         self.last_request_time = 0
         
-        logger.info(f"🎯 [CLIENT] Initialized for task {self.task_id[:8]} with key #{self.key_index + 1}")
+        logger.info(f"[CLIENT] Initialized for task {self.task_id[:8]} with key #{self.key_index + 1}")
     
     def _rotate_to_new_key(self):
-        """Rotate to a new key after current key fails"""
+        """
+        Rotate to a new key after current key fails
+        """
         self.failed_keys.add(self.key_index)
-        logger.warning(f"🔄 [CLIENT] Rotating from failed key #{self.key_index + 1}. "
+        logger.warning(f"[CLIENT] Rotating from failed key #{self.key_index + 1}. "
                       f"Failed keys so far: {sorted([k+1 for k in self.failed_keys])}")
         
         try:
-            # Get new key excluding failed ones
             self.key_index, self.api_key = self.manager.assign_key(
                 self.task_id, 
                 exclude_keys=self.failed_keys
             )
             self.genai_client = genai.Client(api_key=self.api_key)
-            self.last_request_time = 0  # Reset rate limiter
-            logger.info(f"✅ [CLIENT] Rotated to new key #{self.key_index + 1}")
+            self.last_request_time = 0
+            logger.info(f"[CLIENT] Rotated to new key #{self.key_index + 1}")
             return True
         except Exception as e:
-            logger.error(f"❌ [CLIENT] Cannot rotate: {e}")
+            logger.error(f"[CLIENT] Cannot rotate: {e}")
             return False
     
     def call_with_retry(self, prompt, max_retries=5, model="models/gemini-2.5-flash-lite", **config):
         """
-        Call API với dedicated key và rate limiting + auto rotation
+        Call API with dedicated key and rate limiting + auto rotation
         
         Strategy:
         - Try max_retries times with current key
@@ -186,104 +181,88 @@ class DedicatedKeyClient:
         
         for rotation_attempt in range(max_key_rotations):
             current_key_num = self.key_index + 1
-            logger.debug(f"🔑 [CLIENT] Using key #{current_key_num} (rotation {rotation_attempt + 1}/{max_key_rotations})")
+            logger.debug(f"[CLIENT] Using key #{current_key_num} (rotation {rotation_attempt + 1}/{max_key_rotations})")
             
-            # Try max_retries with current key
             for attempt in range(max_retries):
                 try:
-                    # Rate limiting: Đảm bảo ít nhất 4 giây giữa các requests
                     current_time = time.time()
                     time_since_last = current_time - self.last_request_time
                     
                     if time_since_last < self.min_delay_between_requests:
                         sleep_time = self.min_delay_between_requests - time_since_last
-                        logger.debug(f"⏳ [CLIENT #{current_key_num}] Rate limiting: sleeping {sleep_time:.1f}s")
+                        logger.debug(f"[CLIENT #{current_key_num}] Rate limiting: sleeping {sleep_time:.1f}s")
                         time.sleep(sleep_time)
                     
                     self.last_request_time = time.time()
                     
-                    # Make API call
                     response_obj = self.genai_client.models.generate_content(
                         model=model,
                         contents=prompt,
                         config=config if config else {"temperature": 0}
                     )
                     
-                    # Handle response safely
                     if response_obj and hasattr(response_obj, "text") and response_obj.text:
                         return response_obj.text.strip()
                     elif response_obj and hasattr(response_obj, "candidates") and response_obj.candidates:
                         candidate = response_obj.candidates[0]
                         if hasattr(candidate, "finish_reason"):
                             finish_reason = str(candidate.finish_reason)
-                            logger.warning(f"⚠️ [CLIENT #{current_key_num}] Response blocked: {finish_reason}")
-                            # Treat blocked response as retryable error
+                            logger.warning(f"[CLIENT #{current_key_num}] Response blocked: {finish_reason}")
                             if attempt < max_retries - 1:
                                 time.sleep(3)
                                 continue
                             else:
-                                # Last attempt, will trigger rotation
                                 raise Exception(f"Response blocked after {max_retries} attempts: {finish_reason}")
                     else:
-                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Empty response")
-                        # Treat empty response as retryable error
+                        logger.warning(f"[CLIENT #{current_key_num}] Empty response")
                         if attempt < max_retries - 1:
                             time.sleep(3)
                             continue
                         else:
-                            # Last attempt, will trigger rotation
                             raise Exception(f"Empty response after {max_retries} attempts")
                     
                 except Exception as e:
                     error_str = str(e)
                     
-                    # 1. SUSPENDED KEY - Immediately rotate, don't retry
-                    if "403" in error_str and "PERMISSION_DENIED" in error_str and "suspended" in error_str.lower():
+                    if "PERMISSION_DENIED" in error_str and "CONSUMER_SUSPENDED" in error_str:
                         logger.error(f"[CLIENT #{current_key_num}] KEY SUSPENDED! Rotating immediately...")
-                        # Break out of retry loop to trigger rotation
-                        break
+                        logger.error(f"Suspended key error: {error_str[:200]}...")
+                        break  # Exit retry loop immediately, go to rotation
                     
-                    # 2. Rate limit - wait longer
                     elif "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
                         wait_time = 10 + (attempt * 5)  # Exponential backoff: 10, 15, 20, 25, 30s
-                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Rate limit hit. "
+                        logger.warning(f"[CLIENT #{current_key_num}] Rate limit hit. "
                                      f"Waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                         
-                        # If this was the last retry, let it fall through to rotation
                         if attempt == max_retries - 1:
-                            logger.error(f"❌ [CLIENT #{current_key_num}] Rate limit persists after {max_retries} retries")
+                            logger.error(f"[CLIENT #{current_key_num}] Rate limit persists after {max_retries} retries")
                             break  # Exit retry loop, go to rotation
                         continue
                     
-                    # 3. Server errors
                     elif "500" in error_str or "503" in error_str or "INTERNAL" in error_str:
-                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Server error. Retrying in 5s...")
+                        logger.warning(f"[CLIENT #{current_key_num}] Server error. Retrying in 5s...")
                         time.sleep(5.0)
                         continue
                     
-                    # 4. Network errors
                     elif "disconnected" in error_str.lower() or "connection" in error_str.lower():
-                        logger.warning(f"⚠️ [CLIENT #{current_key_num}] Network error. Retrying in 3s...")
+                        logger.warning(f"[CLIENT #{current_key_num}] Network error. Retrying in 3s...")
                         time.sleep(3.0)
                         continue
                     
-                    # 5. Other errors - raise
                     else:
-                        logger.error(f"❌ [CLIENT #{current_key_num}] Unexpected error: {error_str}")
+                        logger.error(f"[CLIENT #{current_key_num}] Unexpected error: {error_str}")
                         raise
             
-            # If we reach here, all retries with current key failed
-            logger.error(f"❌ [CLIENT] Key #{current_key_num} exhausted after {max_retries} retries")
+            logger.error(f"[CLIENT] Key #{current_key_num} exhausted after {max_retries} retries")
             
-            # Try to rotate to next key (unless this is the last rotation)
             if rotation_attempt < max_key_rotations - 1:
                 if not self._rotate_to_new_key():
-                    break  # Cannot rotate anymore
-                logger.info(f"🔄 [CLIENT] Retrying with new key #{self.key_index + 1}...")
-                time.sleep(5)  # Brief pause before trying new key
+                    break
+                logger.info(f"[CLIENT] Retrying with new key #{self.key_index + 1}...")
+                time.sleep(5)
             else:
-                logger.error(f"❌ [CLIENT] All {max_key_rotations} keys exhausted!")
+                logger.error(f"[CLIENT] All {max_key_rotations} keys exhausted!")
         
         raise Exception(f"All keys exhausted! Tried {len(self.failed_keys) + 1} different keys.")
     
