@@ -138,10 +138,10 @@ def chunk_document(
         elif (similarity < threshold and 
               len(current_chunk_sentences) >= min_chunk_sentences):
             should_split = True
-            logger.debug(f"    Sentence {i}: Similarity {similarity:.3f} < {threshold} - splitting")
+            logger.debug(f"Sentence {i}: Similarity {similarity:.3f} < {threshold} - splitting")
         
         else:
-            logger.debug(f"    Sentence {i}: Similarity {similarity:.3f} - continuing chunk")
+            logger.debug(f"Sentence {i}: Similarity {similarity:.3f} - continuing chunk")
         
         if should_split:
             chunk_text = " ".join(current_chunk_sentences).strip()
