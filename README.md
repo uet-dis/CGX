@@ -1,4 +1,4 @@
-# CGX: Medical Knowledge Graph RAG
+# CGX: OCR-Enhanced Knowledge Graph Retrieval for Explainable Heart Failure Analysis
 
 Graph-based RAG system for cardiovascular medical knowledge with three-layer architecture, NER filtering, and hybrid retrieval.
 
