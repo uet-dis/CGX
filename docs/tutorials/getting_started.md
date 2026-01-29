@@ -1,10 +1,11 @@
-# Getting Started with CVDGraphRAG
+# Getting Started with CGX
 
 ## 📋 Prerequisites
 
 ### System Requirements
 
 **Minimum:**
+
 - Ubuntu 20.04+ or similar Linux distribution
 - Python 3.10+
 - Neo4j 5.0+
@@ -12,6 +13,7 @@
 - 20GB free disk space
 
 **Recommended:**
+
 - 16GB+ RAM
 - NVIDIA GPU (for NER)
 - SSD storage
@@ -32,8 +34,8 @@
 ### Step 1: Clone Repository
 
 ```bash
-git clone https://github.com/datmieu204/CVDGraphRAG.git
-cd CVDGraphRAG
+git clone https://github.com/datmieu204/CGX.git
+cd CGX
 ```
 
 ### Step 2: Create Virtual Environment
@@ -143,6 +145,7 @@ print(f'Test result: {result}')
 ```
 
 Expected output:
+
 ```
 ✅ Neo4j connection successful!
 Test result: [{'test': 1}]
@@ -162,16 +165,19 @@ ls layer1_mimic_ex/  # Should show sample reports
 ### Option 2: Download Additional Data
 
 **MIMIC-IV (requires PhysioNet credential):**
+
 1. Get access: https://physionet.org/content/mimiciv/
 2. Download discharge summaries
 3. Place in `data/layer1_mimic_ex/`
 
 **PubMed Central Articles:**
+
 1. Download from: https://www.ncbi.nlm.nih.gov/pmc/
 2. Extract full-text articles
 3. Place in `data/layer2_pmc/`
 
 **UMLS (requires UMLS license):**
+
 1. Get license: https://www.nlm.nih.gov/research/umls/
 2. Download UMLS files
 3. Convert to CSV format
@@ -207,11 +213,13 @@ python run.py \
 ```
 
 **Options:**
+
 - `-grained_chunk`: Use semantic chunking (recommended)
 - `-bottom_filter`: Use NER filtering (requires GPU)
 - `-ingraphmerge`: Merge similar entities
 
 **Expected output:**
+
 ```
 [Graph Construction] Starting knowledge graph construction...
 [Chunking] Using semantic chunking...
@@ -231,6 +239,7 @@ python add_summary_embeddings.py --batch-size 50
 ```
 
 Expected output:
+
 ```
 Found 20 summaries without embeddings
 Adding embeddings: 100%|██████████| 20/20
@@ -319,6 +328,7 @@ print(f"\nAnswer:\n{answer}")
 ```
 
 Run:
+
 ```bash
 python test_query.py
 ```
@@ -338,11 +348,13 @@ python test_query.py
 ### Issue: Neo4j connection failed
 
 **Error:**
+
 ```
 ServiceUnavailable: Could not connect to bolt://localhost:7687
 ```
 
 **Solution:**
+
 ```bash
 # Check if Neo4j is running
 sudo systemctl status neo4j
@@ -357,11 +369,13 @@ sudo ufw allow 7687/tcp
 ### Issue: API key invalid
 
 **Error:**
+
 ```
 PERMISSION_DENIED: API key not valid
 ```
 
 **Solution:**
+
 1. Verify key at: https://ai.google.dev/
 2. Check `.env` file for typos
 3. Ensure no spaces around `=` in `.env`
@@ -370,12 +384,14 @@ PERMISSION_DENIED: API key not valid
 ### Issue: Out of memory
 
 **Error:**
+
 ```
 OutOfMemoryError: Java heap space
 ```
 
 **Solution:**
 Increase Neo4j memory in `neo4j.conf`:
+
 ```
 server.memory.heap.initial_size=2G
 server.memory.heap.max_size=4G
@@ -384,6 +400,7 @@ server.memory.heap.max_size=4G
 ### Issue: Import too slow
 
 **Solutions:**
+
 1. Use fewer documents for testing
 2. Skip Bottom layer initially
 3. Disable `-ingraphmerge` flag
@@ -391,7 +408,7 @@ server.memory.heap.max_size=4G
 
 ## 📚 Next Steps
 
-Now that you have CVDGraphRAG running, explore:
+Now that you have CGX running, explore:
 
 1. **[Building Knowledge Graph](building_graph.md)** - Learn advanced import options
 2. **[Running Inference](running_inference.md)** - Explore retrieval modes
@@ -403,7 +420,7 @@ Now that you have CVDGraphRAG running, explore:
 - Check [Troubleshooting Guide](troubleshooting.md)
 - Review [API Documentation](../api/improved_retrieve.md)
 - See [Architecture Overview](../architecture/system_components.md)
-- Open GitHub Issue: https://github.com/datmieu204/CVDGraphRAG/issues
+- Open GitHub Issue: https://github.com/datmieu204/CGX/issues
 
 ---
 

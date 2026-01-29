@@ -7,7 +7,7 @@ Uses improved U-Retrieval with:
 2. Query-aware context ranking
 3. Multi-subgraph aggregation
 
-Author: CVDGraphRAG Team
+Author: CGX Team
 """
 
 import sys

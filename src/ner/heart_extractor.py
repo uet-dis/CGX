@@ -1,6 +1,6 @@
 """
 Heart Failure Entity Extractor
-Author: CVDGraphRAG Team
+Author: CGX Team
 """
 
 import torch

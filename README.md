@@ -8,11 +8,14 @@ Graph-based RAG system for cardiovascular medical knowledge with three-layer arc
 
 ## Features
 
-- **Three-Layer Graph**: UMLS ontology → Clinical guidelines → Patient cases
-- **Smart Filtering**: NER-based entity linking reduces LLM calls by 40-60%
-- **Hybrid Retrieval**: Vector search + LLM reranking (98.6% cost reduction, 19.9x faster)
-- **Semantic Chunking**: Embedding-based segmentation (no LLM costs)
-- **Parallel Processing**: Multi-key API management for 3x throughput
+- **Three-Layer Graph**: UMLS ontology → Clinical guidelines → Patient cases with smart entity linking
+- **Hybrid U-Retrieval**: Vector search + LLM reranking (98.6% cost reduction, 19.9x faster, 214→3 LLM calls)
+- **Smart Entity Linking**: NER-based filtering (10-15x faster, 100x fewer candidates)
+- **Dedicated API Keys**: Multi-key management (5x throughput, 95% fewer rate limits)
+- **Semantic Chunking**: Embedding-based segmentation (zero LLM costs)
+- **NER Filtering**: Skip 40-60% irrelevant chunks before graph construction
+
+📚 **Detailed Documentation**: See [docs/](docs/) for architecture guides, API reference, and improvement details
 
 ## Quick Start
 
@@ -79,9 +82,17 @@ python three_layer_import.py --clear --bottom ../data/layer3_umls \
 
 ## Documentation
 
+**Quick Links**:
+
+- [Step-by-Step Guide](step_by_step.md) - Complete setup walkthrough
 - [Multimodal Parser](multimodal_parser/README.md) - PDF/Office document extraction
-- [Improved Retrieval](src/improved_retrieve.py) - Hybrid retrieval implementation
-- [Step-by-Step Guide](step_by_step.md) - Detailed setup instructions
+
+**Comprehensive Docs** ([docs/](docs/)):
+
+- **Architecture**: [Three-Layer Graph](docs/architecture/three_layer_architecture.md), System Components, NER Pipeline
+- **Improvements**: [Hybrid Retrieval](docs/improvements/hybrid_retrieval.md), [Smart Linking](docs/improvements/smart_linking.md), [API Key Management](docs/improvements/api_key_management.md)
+- **API Reference**: Module documentation for all src/ components
+- **Tutorials**: Graph building, optimization, evaluation
 
 ## Configuration
 

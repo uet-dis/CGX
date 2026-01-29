@@ -1,6 +1,6 @@
 """
 Semantic Chunker
-Author: CVDGraphRAG Team
+Author: CGX Team
 """
 
 import os

@@ -137,11 +137,11 @@ def generate_latex_table(aggregates: Dict) -> str:
     """Generate LaTeX table for paper"""
     
     latex = []
-    latex.append("% CVDGraphRAG Evaluation Results - 200 Medical Questions")
+    latex.append("% CGX Evaluation Results - 200 Medical Questions")
     latex.append("\\begin{table}[h]")
     latex.append("\\centering")
-    latex.append("\\caption{CVDGraphRAG Performance on Medical QA Dataset (200 questions)}")
-    latex.append("\\label{tab:cvdgraphrag_results}")
+    latex.append("\\caption{CGX Performance on Medical QA Dataset (200 questions)}")
+    latex.append("\\label{tab:CGX_results}")
     latex.append("\\begin{tabular}{lcccc}")
     latex.append("\\hline")
     latex.append("\\textbf{Metric} & \\textbf{Mean} & \\textbf{Std} & \\textbf{Min} & \\textbf{Max} \\\\")

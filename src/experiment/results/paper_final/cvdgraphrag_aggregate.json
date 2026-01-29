@@ -1,5 +1,5 @@
 {
-  "method": "CVDGraphRAG (base)",
+  "method": "CGX (base)",
   "total_questions": 1000,
   "answer_similarity": {
     "mean": 0.766165,

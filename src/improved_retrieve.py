@@ -7,7 +7,7 @@ Enhancements:
 3. Query-aware context ranking
 4. Entity-guided retrieval (optional)
 
-Author: CVDGraphRAG Team
+Author: CGX Team
 """
 
 import numpy as np

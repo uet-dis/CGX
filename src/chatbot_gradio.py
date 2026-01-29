@@ -4,7 +4,7 @@ Medical Knowledge Graph Chatbot with Gradio
 Interactive chatbot interface for medical question answering
 using the improved inference pipeline.
 
-Author: CVDGraphRAG Team
+Author: CGX Team
 """
 
 import os

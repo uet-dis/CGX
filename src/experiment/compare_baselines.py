@@ -145,7 +145,7 @@ def compare_all_methods(
     
     cvd_results = evaluator.evaluate_dataset(
         list(zip(questions, ground_truths)),
-        output_file=f"{output_dir}/cvdgraphrag_raw.json"
+        output_file=f"{output_dir}/CGX_raw.json"
     )
     
     cvd_valid = [r for r in cvd_results if r.get('metrics')]
@@ -158,7 +158,7 @@ def compare_all_methods(
     else:
         cvd_metrics = {}
     
-    all_results['CVDGraphRAG'] = {
+    all_results['CGX'] = {
         'metrics': cvd_metrics,
         'method': 'Three-Layer Graph RAG with Smart Linking'
     }

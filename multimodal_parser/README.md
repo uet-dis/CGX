@@ -10,7 +10,7 @@ This module provides a robust pipeline for extracting structured text from medic
 
 - **Layout-Aware Parsing**: Intelligent column detection and reading order (full-width → left column → right column)
 - **Academic Structure Recognition**: Automatic detection of sections (Abstract, Methods, Results, etc.)
-- **Content Filtering**: 
+- **Content Filtering**:
   - Skips content before Abstract
   - Stops after Conclusion
   - Filters subsection numbers and invalid headers
@@ -35,11 +35,13 @@ multimodal_parser/
 ### Prerequisites
 
 1. **MinerU** (core dependency):
+
 ```bash
 pip install -U 'mineru[core]'
 ```
 
 2. **LibreOffice** (for Office document conversion):
+
 ```bash
 # Ubuntu/Debian
 sudo apt-get install libreoffice
@@ -49,11 +51,13 @@ brew install --cask libreoffice
 ```
 
 3. **Python dependencies**:
+
 ```bash
 pip install transformers torch nltk
 ```
 
 4. **NLTK data**:
+
 ```python
 python -m nltk.downloader punkt punkt_tab
 ```
@@ -131,6 +135,7 @@ output_path = processor.process_content_list_json(
    - Skips title/author sections before Abstract
 
 2. **Reading Order**:
+
    ```
    Full-width items → Left column → Right column
    ```
@@ -141,6 +146,7 @@ output_path = processor.process_content_list_json(
    - Cleans headers (removes punctuation/numbering)
 
 **Valid Sections:**
+
 ```python
 VALID_SECTIONS = {
     "Abstract", "Background", "Introduction",
@@ -161,6 +167,7 @@ VALID_SECTIONS = {
 - `_group_by_sections(blocks)` - Group content by detected sections
 
 **Output Format:**
+
 ```
 Abstract
 Content without blank line between header and text
@@ -195,24 +202,28 @@ formatted_text = build_pubmed_txt(sections)
 ## Text Cleaning Features
 
 ### Formula Removal
+
 ```python
 # Before: "The equation $E=mc^2$ shows..."
 # After: "The equation  shows..."
 ```
 
 ### Citation Cleaning
+
 ```python
 # Before: "Recent studies^1,2,3 have shown..."
 # After: "Recent studies have shown..."
 ```
 
 ### Whitespace Normalization
+
 ```python
 # Before: "Multiple    spaces   here"
 # After: "Multiple spaces here"
 ```
 
 ### Header Cleaning
+
 ```python
 # Before: "2.1 Introduction::"
 # After: "Introduction"
@@ -245,7 +256,7 @@ for pdf_file in pdf_dir.glob("*.pdf"):
     print(f"Processing: {pdf_file.name}")
     text_blocks = parser.parse_document(pdf_file)
     output = processor.process_document(
-        text_blocks, 
+        text_blocks,
         doc_name=pdf_file.stem
     )
     print(f"✓ Saved to: {output}")
@@ -286,6 +297,7 @@ for section_name, content in sections.items():
 ### Language Support
 
 Specify with `--lang` or `lang` parameter:
+
 ```bash
 python demo.py paper.pdf --lang zh  # Chinese
 python demo.py paper.pdf --lang en  # English (default)
@@ -344,6 +356,7 @@ python test_bbox.py path/to/content_list.json
 ```
 
 This will:
+
 1. Process the JSON with bbox logic
 2. Extract text in correct reading order
 3. Filter sections (Abstract → Conclusion)
@@ -363,15 +376,19 @@ with open("output/test_output.txt") as f:
 ## Common Use Cases
 
 ### 1. Medical Literature Review
+
 Extract structured content from systematic reviews and meta-analyses.
 
 ### 2. Clinical Guideline Processing
+
 Parse treatment protocols and clinical practice guidelines for knowledge graphs.
 
 ### 3. Research Paper Database
+
 Build searchable databases of medical research with structured sections.
 
 ### 4. Knowledge Graph Construction
+
 Feed extracted content to three-layer architecture (Bottom/Middle/Top).
 
 ## Error Handling
@@ -435,10 +452,10 @@ See parent project license.
 
 ## Contact
 
-For issues or questions, please refer to the main CVDGraphRAG repository.
+For issues or questions, please refer to the main CGX repository.
 
 ---
 
 **Version**: 1.0.0  
 **Last Updated**: December 2025  
-**Maintainer**: CVDGraphRAG Team
+**Maintainer**: CGX Team
