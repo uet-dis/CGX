@@ -1,32 +1,60 @@
-# Use a base image with Conda
-FROM continuumio/miniconda3
+# Multi-stage build for CGX Medical Knowledge Graph RAG System
+FROM python:3.10-slim AS builder
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install curl, bash, and other dependencies
-RUN apt-get update && apt-get install -y curl bash build-essential \
-    && curl https://sh.rustup.rs -sSf | bash -s -- -y
-
-# Set the working directory in the container
+# Set working directory
 WORKDIR /app
 
-# Ensure the Rust binaries are available in the PATH
-ENV PATH="/root/.cargo/bin:${PATH}"
+# Copy requirements first for better caching
+COPY requirements.txt .
 
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Copy the environment YAML file into the Docker image
-COPY medgraphrag.yml .
+# Final stage
+FROM python:3.10-slim
 
-RUN conda config --append channels conda-forge
-RUN conda config --append channels pkgs/main
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
+# Set working directory
+WORKDIR /app
 
-# Create the Conda environment inside the Docker container
-RUN conda env create -f medgraphrag.yml
+# Copy Python packages from builder
+COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/python3.10/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Make sure the environment is activated and Conda commands are available
-RUN echo "source activate medgraphrag" > ~/.bashrc
-SHELL ["/bin/bash", "--login", "-c"]
-
-# Copy the rest of the application code into the Docker image
+# Copy application code
 COPY . /app
+
+# Create necessary directories
+RUN mkdir -p logs data .hf_cache
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV TRANSFORMERS_CACHE=/app/.hf_cache
+ENV HF_HOME=/app/.hf_cache
+
+# Expose ports
+# 7860 for Gradio chatbot
+# 8000 for potential FastAPI endpoints
+EXPOSE 7860 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)" || exit 1
+
+# Default command (can be overridden)
+CMD ["python", "chatbot_gradio.py"]
 
