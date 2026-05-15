@@ -149,8 +149,8 @@ Your ranking:"""
 
     try:
         response = client.call_with_retry(
-            rerank_prompt, 
-            model="models/gemini-2.5-flash-lite",
+            rerank_prompt,
+            model="gemini-2.5-pro",
             max_retries=3
         )
         
@@ -398,11 +398,17 @@ def get_improved_response(n4j, query: str, client=None,
         link_context = get_ranked_link_context(n4j, primary_gid, query, max_items=50)
     
     sys_prompt_one = """
-Please answer the question using insights supported by provided graph-based data relevant to medical information.
+You are a medical expert. Answer the question with confidence and clarity.
+If the question has multiple-choice options, analyze each option systematically and select the best answer.
+Base your reasoning on medical principles and the provided context.
+Provide clear medical reasoning for your choice without disclaimers about insufficient information.
 """
     
     sys_prompt_two = """
-Modify the response to the question using the provided references. Include precise citations relevant to your answer. You may use multiple citations simultaneously, denoting each with the reference index number. For example, cite the first and third documents as [1][3]. If the references do not pertain to the response, simply provide a concise answer to the original question.
+Refine and strengthen the draft response. Use the provided references to support your answer with citations [1][3] where applicable.
+Ensure the response is clear, confident, and focuses on medical reasoning.
+If references support the answer, cite them. Otherwise, rely on sound medical logic.
+Keep the final answer concise and professional.
 """
     MAX_CONTEXT_CHARS = 4000
     
@@ -419,10 +425,10 @@ Modify the response to the question using the provided references. Include preci
     
     user_one = f"the question is: {query}\n\nthe provided information is:\n{selfcont_str}"
     full_prompt_one = f"{sys_prompt_one}\n\n{user_one}"
-    res = client.call_with_retry(full_prompt_one, model="models/gemini-2.5-flash-lite", max_retries=3)
+    res = client.call_with_retry(full_prompt_one, model="gemini-2.5-pro", max_retries=3)
     user_two = f"the question is: {query}\n\nthe last response of it is:\n{res}\n\nthe references are:\n{linkcont_str}"
     full_prompt_two = f"{sys_prompt_two}\n\n{user_two}"
-    final_answer = client.call_with_retry(full_prompt_two, model="models/gemini-2.5-flash-lite", max_retries=3)
+    final_answer = client.call_with_retry(full_prompt_two, model="gemini-2.5-pro", max_retries=3)
     
     logger.info(f"[Improved Response] Generated answer ({len(final_answer)} chars)")
     
