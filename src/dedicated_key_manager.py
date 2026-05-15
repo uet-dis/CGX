@@ -6,6 +6,7 @@ Mỗi task/file sẽ được assign 1 key riêng để tránh rate limit confli
 import os
 import time
 from google import genai
+from google.genai.types import HttpOptions
 from threading import Lock
 import random
 
@@ -294,3 +295,68 @@ def create_dedicated_client(task_id=None):
         response = client.call_with_retry("Your prompt here")
     """
     return DedicatedKeyClient(task_id)
+
+
+class GoogleCloudClient:
+    """
+    Simple client that uses a single Google Cloud API key.
+    This is intended as a drop-in alternative to DedicatedKeyClient.
+    """
+
+    def __init__(self, api_key=None, api_version="v1"):
+        key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+        if not key:
+            raise ValueError("Missing Google Cloud API key. Set GOOGLE_API_KEY or GEMINI_API_KEY.")
+
+        self.genai_client = genai.Client(
+            api_key=key,
+            http_options=HttpOptions(api_version=api_version),
+        )
+
+    def call_with_retry(self, prompt, max_retries=3, model="gemini-2.5-flash", **config):
+        """
+        Call API with basic retries.
+
+        Args:
+            prompt: Text prompt
+            max_retries: Max retry attempts
+            model: Model name (e.g. gemini-2.5-flash)
+            **config: Additional config
+        """
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                response_obj = self.genai_client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=config if config else {"temperature": 0},
+                )
+
+                if response_obj and hasattr(response_obj, "text") and response_obj.text:
+                    return response_obj.text.strip()
+
+                if response_obj and hasattr(response_obj, "candidates") and response_obj.candidates:
+                    candidate = response_obj.candidates[0]
+                    if hasattr(candidate, "finish_reason"):
+                        raise Exception(f"Response blocked: {candidate.finish_reason}")
+
+                raise Exception("Empty response")
+            except Exception as exc:
+                last_error = exc
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+
+        raise Exception(f"GoogleCloudClient failed after {max_retries} attempts: {last_error}")
+
+
+def create_google_cloud_client(api_key=None, api_version="v1"):
+    """
+    Create a GoogleCloudClient using API key from env if not provided.
+
+    Usage:
+        client = create_google_cloud_client()
+        response = client.call_with_retry("Hello", model="gemini-2.5-flash")
+    """
+    return GoogleCloudClient(api_key=api_key, api_version=api_version)

@@ -32,7 +32,7 @@ from camel.storages import Neo4jGraph
 from dataloader import load_high
 from improved_retrieve import hybrid_retrieve, get_improved_response, improved_seq_ret
 from utils import get_bge_m3_embedding
-from dedicated_key_manager import create_dedicated_client
+from dedicated_key_manager import create_google_cloud_client
 from logger_ import get_logger
 
 logger = get_logger("improved_eval", log_file="logs/evaluate/improved_eval.log")
@@ -79,7 +79,7 @@ class ImprovedSemanticEvaluator:
         )
         logger.info("Connected to Neo4j")
         
-        self.client = create_dedicated_client(task_id="improved_evaluator")
+        self.client = create_google_cloud_client()
         logger.info("Client initialized")
         
         # Rouge scorer
