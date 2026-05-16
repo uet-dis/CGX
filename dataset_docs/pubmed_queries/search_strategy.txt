@@ -1,0 +1,37 @@
+# PubMed Central Search Strategy: Heart Failure (Cumulative Filter Pipeline)
+
+This document describes the 5-stage cumulative filtering process used to extract 50 source documents from PMC for the CGX system.
+
+## Stage 1: Base Query (32,415 results)
+**Objective:** Collect broad heart failure knowledge (2020-2025).
+**Query:**
+```sql
+("Heart Failure"[MeSH Terms] OR "Heart Failure"[Title/Abstract] OR "Cardiac Failure"[Title/Abstract] OR "Heart Decompensation"[Title/Abstract]) AND ("Guideline"[PT] OR "Practice Guideline"[PT] OR "Systematic Review"[PT] OR "Meta-Analysis"[PT]) AND ("2020/01/01"[PDAT] : "2025/12/31"[PDAT]) AND "english"[LA]
+```
+
+## Stage 2: Narrowing by Publication Type (17,450 results)
+**Objective:** Focus exclusively on official clinical practice guidelines.
+**Query:**
+```sql
+(STAGE_1_RESULTS) AND ("Guideline"[Publication Type] OR "Practice Guideline"[Publication Type])
+```
+
+## Stage 3: Filtering by Elite Journals (2,815 results)
+**Objective:** Filter by a list of high-impact journals available on the PMC system.
+**Query:**
+```sql
+(STAGE_2_RESULTS) AND ("Eur J Heart Fail"[Journal] OR "ESC Heart Fail"[Journal] OR "J Am Coll Cardiol"[Journal] OR "Circulation"[Journal] OR "JAMA Netw Open"[Journal] OR "Front Cardiovasc Med"[Journal] OR "Sci Rep"[Journal])
+```
+
+## Stage 4: Strict Title Filtering (214 results)
+**Objective:** Ensure heart failure is the primary focus and the content covers management/treatment.
+**Query:**
+```sql
+("Heart Failure"[Title]) AND ("Management"[Title] OR "Guidelines"[Title] OR "Guideline"[Title] OR "Consensus"[Title] OR "Treatment"[Title] OR "Therapy"[Title]) AND ("Practice Guideline"[PT] OR "Guideline"[PT]) AND ("2020/01/01"[PDAT] : "2025/12/31"[PDAT]) AND ("Eur Heart J"[Journal] OR "J Am Coll Cardiol"[Journal] OR "Circulation"[Journal] OR "Eur J Heart Fail"[Journal] OR "ESC Heart Fail"[Journal] OR "JACC Heart Fail"[Journal] OR "Circ Heart Fail"[Journal]) AND "english"[LA]
+```
+
+## Stage 5: Manual Screening (Final 50 Papers)
+Direct selection from the 214 results in Stage 4 to identify the final 50 articles, sorted by publication date (PMCID list stored in `final_pmc_list.txt`).
+
+---
+*Note: All commands are designed to be run directly on the PubMed Central (PMC) search engine.*
