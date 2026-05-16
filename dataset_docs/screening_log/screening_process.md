@@ -13,9 +13,16 @@ A rigorous screening process combining automated queries and manual selection to
 | **Eligibility** | Full-text assessment of 214 articles for clinical relevance | 214 |
 | **Included** | **Manual expert screening to select the final elite set** | **50** |
 
-## 2. Final Manual Selection Criteria
+## 2. Final Selection Criteria (Inclusion/Exclusion)
 
-From the 214 potential articles, 50 were manually selected based on:
-1. **Clinical Applicability:** Priority given to practical pharmacological and management protocols (especially HFrEF).
-2. **Representativeness:** Selection of guidelines from major societies (European Society of Cardiology - ESC, and American Heart Association/College of Cardiology - AHA/ACC).
-3. **Comprehensiveness:** Ensuring coverage of diagnosis, acute treatment, and long-term chronic heart failure management.
+From the 214 potential articles, 50 were manually selected based on the following strict criteria:
+
+### Inclusion Criteria:
+- **Clinical Relevance:** Documents containing evidence on heart failure **diagnosis, treatment, prognosis, or comorbidities**.
+- **Full-Text Availability:** Only open-access full-text documents accessible via PubMed Central.
+- **Authority:** Guidelines from major medical societies (ESC, AHA, ACC).
+
+### Exclusion Criteria:
+- **Duplicates:** Identical articles or redundant updates from the same year.
+- **Inaccessibility:** Documents with restricted access or missing full-text data.
+- **Clinical Irrelevance:** Articles focusing on non-human studies or unrelated cardiovascular conditions.
