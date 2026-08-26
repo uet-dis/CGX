@@ -110,11 +110,18 @@ Includes:
 ## Citation
 
 ```bibtex
-@article{cgx2025,
-  title={CGX: OCR-Enhanced Knowledge Graph Retrieval for Explainable Heart Failure Analysis},
-  author={Nguyen, Dat T. and Le, Anh N. and Trinh, Binh T. and Vu, Duy B. and Nguyen, Hoa N.},
-  journal={},
-  year={2025}
+@article{NGUYEN2026105089,
+title = {CGX: OCR-enhanced knowledge graph retrieval for explainable heart failure analysis},
+journal = {Journal of Biomedical Informatics},
+volume = {181},
+pages = {105089},
+year = {2026},
+issn = {1532-0464},
+doi = {https://doi.org/10.1016/j.jbi.2026.105089},
+url = {https://www.sciencedirect.com/science/article/pii/S1532046426001139},
+author = {Dat T. Nguyen and Anh N. Le and Binh T. Trinh and Duy B. Vu and Hoa N. Nguyen},
+keywords = {Knowledge graph, Internal medicine, Heart failure, Cardiovascular, Graph-based modeling, Retrieval-augmented generation},
+abstract = {Knowledge graphs are increasingly used to organize and retrieve complex medical information, yet existing graph-based retrieval systems often suffer from high construction costs, limited scalability as knowledge grows, and limited interpretability in clinical practice. These challenges are amplified in cardiovascular medicine, where data are heterogeneous, noisy, and linked by complex relationships. In this work, we present CGX, a domain-oriented GraphRAG framework that mirrors clinical reasoning for explainable heart failure analysis. CGX structures cardiovascular knowledge into a three-layer hierarchy that spans patient-level observations, guideline-based evidence, and standardized ontologies. An OCR-enhanced preprocessing pipeline combined with a zero-shot biomedical transformer converts PDF-based biomedical literature/guidelines and machine-readable clinical narratives into semantic triples, reducing error propagation compared with vanilla RAG. A Hybrid U-Retrieval mechanism then exploits the graph topology through top-down summary retrieval and bottom-up path refinement, producing explicit evidence chains that support each answer. Initial experiments on heart-failure–focused clinical question answering show that CGX improves evidence retrieval quality and perceived answer reliability over conventional retrieval methods, while reducing total graph construction time by 69.7% under the same input corpus and hardware setting. Under blinded expert clinical evaluation, CGX reduces the rate of clinically risky answers from 12.4%–14.0% to 8.3%, alongside substantially higher scores across all five expert-rated Likert criteria compared with both baselines. These results suggest that CGX offers a scalable and reusable GraphRAG architecture for integrating structured medical knowledge with large language models to support trustworthy clinical decision-making.}
 }
 ```
 
